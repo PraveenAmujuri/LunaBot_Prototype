@@ -1,0 +1,29 @@
+# --- Unity ---
+LunaBot-Unity/Lunabot-ProtoType/[Ll]ibrary/
+LunaBot-Unity/Lunabot-ProtoType/[Tt]emp/
+LunaBot-Unity/Lunabot-ProtoType/[Oo]bj/
+LunaBot-Unity/Lunabot-ProtoType/[Bb]uild/
+LunaBot-Unity/Lunabot-ProtoType/[Bb]uilds/
+LunaBot-Unity/Lunabot-ProtoType/[Ll]ogs/
+LunaBot-Unity/Lunabot-ProtoType/[Uu]serSettings/
+LunaBot-Unity/Library/PackageCache/
+# === ROS ===
+catkin_ws/build/
+catkin_ws/devel/
+catkin_ws/install/
+catkin_ws/log/
+catkin_ws/src/CMakeLists.txt
+*.log
+*.swp
+*~
+
+# === Python ===
+__pycache__/
+LunaBotDashboard/venv/
+LunaBotDashboard/env/
+LunaBotDashboard/dashboard_env/
+*.pyc
+
+# === OS Files ===
+.DS_Store
+Thumbs.db

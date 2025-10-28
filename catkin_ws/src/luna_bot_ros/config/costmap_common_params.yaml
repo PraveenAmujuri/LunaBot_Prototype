@@ -1,0 +1,25 @@
+# SMALLER FOOTPRINT - 6m diameter (was 8m)
+footprint: [
+  [3.0, 0.0], [2.6, 1.5], [1.5, 2.6], [0.0, 3.0],
+  [-1.5, 2.6], [-2.6, 1.5], [-3.0, 0.0], [-2.6, -1.5],
+  [-1.5, -2.6], [0.0, -3.0], [1.5, -2.6], [2.6, -1.5]
+]
+
+obstacle_layer:
+  enabled: true
+  obstacle_range: 12.0
+  raytrace_range: 20.0
+  observation_sources: scan
+  scan:
+    sensor_frame: lidar_link
+    data_type: LaserScan
+    topic: /scan
+    marking: true
+    clearing: true
+    min_obstacle_height: 0.0
+    max_obstacle_height: 3.0
+
+inflation_layer:
+  enabled: true
+  inflation_radius: 2.0     # REDUCED from 2.5m
+  cost_scaling_factor: 5.0

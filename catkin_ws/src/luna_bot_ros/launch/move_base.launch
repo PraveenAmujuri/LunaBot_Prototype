@@ -1,0 +1,54 @@
+<launch>
+  <!-- TF -->
+  <node pkg="tf" type="static_transform_publisher" name="map_odom_broadcaster"
+        args="0 0 0 0 0 0 map odom 100" />
+  <node pkg="tf" type="static_transform_publisher" name="base_lidar_broadcaster"
+        args="0 0 0.5 0 0 0 base_link lidar_link 100" />
+  <node pkg="luna_bot_ros" type="odom_to_tf.py" name="odom_to_tf" output="screen"/>
+  <node pkg="luna_bot_ros" type="mapping_node.py" name="odometry_based_mapper" output="screen"/>
+  
+  <!-- MOVE BASE with AGGRESSIVE RECOVERY -->
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+    
+    <rosparam file="$(find luna_bot_ros)/config/costmap_common_params.yaml" command="load" ns="global_costmap" />
+    <rosparam file="$(find luna_bot_ros)/config/costmap_common_params.yaml" command="load" ns="local_costmap" />
+    <rosparam file="$(find luna_bot_ros)/config/local_costmap_params.yaml" command="load" />
+    <rosparam file="$(find luna_bot_ros)/config/global_costmap_params.yaml" command="load" />
+    <rosparam file="$(find luna_bot_ros)/config/base_local_planner_params.yaml" command="load" />
+    
+    <param name="base_local_planner" value="base_local_planner/TrajectoryPlannerROS"/>
+    <param name="base_global_planner" value="navfn/NavfnROS"/>
+    
+    <!-- Global Planner - MORE TOLERANT -->
+    <param name="NavfnROS/allow_unknown" value="true"/>
+    <param name="NavfnROS/default_tolerance" value="5.0"/>  <!-- INCREASED from 3.0 -->
+    <param name="NavfnROS/use_dijkstra" value="true"/>
+    
+    <!-- Move Base - MORE PATIENT -->
+    <param name="controller_frequency" value="5.0"/>
+    <param name="planner_frequency" value="2.0"/>
+    <param name="controller_patience" value="20.0"/>  <!-- INCREASED from 15.0 -->
+    <param name="planner_patience" value="10.0"/>     <!-- INCREASED from 5.0 -->
+    <param name="max_planning_retries" value="5"/>    <!-- ADD THIS -->
+    
+    <!-- Recovery - MORE AGGRESSIVE -->
+    <param name="recovery_behavior_enabled" value="true"/>
+    <param name="clearing_rotation_allowed" value="true"/>
+    <param name="conservative_reset_dist" value="5.0"/>  <!-- INCREASED from 4.0 -->
+    
+    <!-- 5-STAGE RECOVERY -->
+    <rosparam param="recovery_behaviors">
+      [
+        {name: conservative_reset, type: clear_costmap_recovery/ClearCostmapRecovery},
+        {name: rotate_recovery_1, type: rotate_recovery/RotateRecovery},
+        {name: aggressive_reset, type: clear_costmap_recovery/ClearCostmapRecovery},
+        {name: rotate_recovery_2, type: rotate_recovery/RotateRecovery},
+        {name: super_reset, type: clear_costmap_recovery/ClearCostmapRecovery}
+      ]
+    </rosparam>
+    
+    <!-- Oscillation -->
+    <param name="oscillation_timeout" value="10.0"/>  <!-- INCREASED from 5.0 -->
+    <param name="oscillation_distance" value="0.5"/>
+  </node>
+</launch>
