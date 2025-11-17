@@ -85,6 +85,7 @@
     <None Include="Assets\Stagit\SkyboxEarthPlanets\readme.txt" />
     <None Include="Assets\Real Stars Skybox\Demo Scene\Documentation.txt" />
     <None Include="Assets\Models\Map\License.txt" />
+    <None Include="Assets\shaders\DepthToFloat.shader" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="UnityEngine">

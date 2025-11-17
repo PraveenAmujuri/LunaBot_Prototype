@@ -1,6 +1,7 @@
 using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
+using System;
 
 public class LidarSensor : MonoBehaviour
 {
@@ -20,7 +21,7 @@ public class LidarSensor : MonoBehaviour
     public string frameId = "lidar_link";
 
     [Header("Debug")]
-    public bool showDebugRays = true;  // ← ENABLED!
+    public bool showDebugRays = true;
     public Color hitColor = Color.red;
     public Color missColor = Color.green;
 
@@ -32,19 +33,22 @@ public class LidarSensor : MonoBehaviour
             return;
         }
         
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // CRITICAL: Check rover's forward direction!
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         Debug.Log("═══════════════════════════════════════════════");
         Debug.Log("🔍 LIDAR Sensor Initialized");
         Debug.Log($"   Rays: {numRays} | FOV: {fov}° | Range: {maxRange}m");
         Debug.Log($"   Position: {transform.position}");
-        Debug.Log($"   Forward: {transform.forward}");  // ← CHECK THIS!
+        Debug.Log($"   Forward: {transform.forward}");
         Debug.Log($"   Rotation: {transform.rotation.eulerAngles}");
         Debug.Log($"   Scanning: {LayerMaskToString(obstacleMask)}");
         Debug.Log("═══════════════════════════════════════════════");
         
         StartCoroutine(PublishLaserScan());
+    }
+
+    // FIXED: Add ROS time helper
+    private double GetROSTime()
+    {
+        return (DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds;
     }
 
     IEnumerator PublishLaserScan()
@@ -68,12 +72,8 @@ public class LidarSensor : MonoBehaviour
             {
                 float angle = angleMin + i * angleIncrement;
                 
-                // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                // FIXED: Use rover's forward, not LIDAR's transform.forward!
-                // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                 Vector3 baseForward = transform.parent != null ? transform.parent.forward : transform.forward;
                 Vector3 dir = Quaternion.Euler(0, Mathf.Rad2Deg * angle, 0) * baseForward;
-                // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
                 RaycastHit hit;
                 bool didHit = Physics.Raycast(transform.position, dir, out hit, maxRange, obstacleMask);
@@ -102,24 +102,21 @@ public class LidarSensor : MonoBehaviour
                 }
             }
 
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // CRITICAL DEBUG: Show minimum distance!
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             if (obstacleCount > 0)
             {
                 Debug.Log($"📡 LIDAR: {obstacleCount}/{numRays} rays hit | MIN DISTANCE: {minObstacleDist:F1}m");
             }
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-            // Publish
+            // FIXED: Use ROS time instead of Unity Time.time
+            double rosTime = GetROSTime();
             var scanMsg = new
             {
                 header = new 
                 {
                     stamp = new 
                     { 
-                        secs = (int)Time.time, 
-                        nsecs = (int)((Time.time % 1) * 1e9) 
+                        secs = (int)rosTime,                    // FIXED
+                        nsecs = (int)((rosTime % 1) * 1e9)      // FIXED
                     },
                     frame_id = frameId
                 },
@@ -162,7 +159,6 @@ public class LidarSensor : MonoBehaviour
         Gizmos.color = Color.blue;
         Gizmos.DrawWireSphere(transform.position, 0.2f);
         
-        // Draw forward direction
         Gizmos.color = Color.cyan;
         Vector3 fwd = transform.parent != null ? transform.parent.forward : transform.forward;
         Gizmos.DrawRay(transform.position, fwd * 2f);

@@ -37,7 +37,7 @@ socketio = SocketIO(app,
 rover_data = {
     "position": {"x": 0.0, "y": 0.0, "z": 0.0},
     "last_position": {"x": 0.0, "y": 0.0, "z": 0.0},
-    "path": deque(maxlen=50),
+    "path": deque(maxlen=500),
     "velocity": {"linear_x": 0.0, "angular_z": 0.0},
     "speed": 0.0,
     "mode": "IDLE",
@@ -288,9 +288,9 @@ def on_message(ws, message):
         # ═══════════════════════════════════════════════════════════
         # NEW: SLAM MESSAGE HANDLERS (ADDED)
         # ═══════════════════════════════════════════════════════════
-        elif topic == "/map":
+        elif topic == "/rtabmap/grid_map":  
             process_map(msg)
-        elif topic == "/semantic_map":
+        elif topic == "/semantic_detections":  
             process_semantic_map(msg)
         elif topic == "/mission_status":
             process_mission_status(msg)
@@ -476,146 +476,6 @@ def process_detection(msg):
 
 
 
-# def process_map(msg):
-#     """
-#     Process occupancy grid map with PROFESSIONAL COLOR THEME + ROVER MARKER
-#     - Black/White classic theme with high contrast
-#     - Cyan rover position marker
-#     - Path history trail in yellow
-#     """
-#     try:
-#         print("🗺️ Processing SLAM map")
-        
-#         width = msg.get('info', {}).get('width', 0)
-#         height = msg.get('info', {}).get('height', 0)
-#         data = msg.get('data', [])
-        
-#         if width == 0 or height == 0 or not data:
-#             print("⚠️ Invalid map data")
-#             return
-        
-#         # Get map metadata
-#         origin_x = msg.get('info', {}).get('origin', {}).get('position', {}).get('x', -40.0)
-#         origin_y = msg.get('info', {}).get('origin', {}).get('position', {}).get('y', -40.0)
-#         resolution = msg.get('info', {}).get('resolution', 0.1)
-        
-#         print(f"🗺️ Map: {width}x{height}, Origin: ({origin_x:.1f}, {origin_y:.1f}), Res: {resolution}m")
-        
-#         # Convert occupancy grid to numpy array
-#         map_array = np.array(data, dtype=np.int8).reshape((height, width))
-        
-#         # ═══════════════════════════════════════════════════════════
-#         # PROFESSIONAL COLOR SCHEME (BGR format for OpenCV)
-#         # ═══════════════════════════════════════════════════════════
-#         # Create RGB image
-#         img = np.zeros((height, width, 3), dtype=np.uint8)
-        
-#         # Color mapping (values in BGR format):
-#         img[map_array == -1] = [180, 180, 180]  # Unknown = medium gray
-#         img[map_array == 0] = [255, 255, 255]   # Free space = WHITE
-#         img[map_array == 50] = [0, 255, 0]      # Base/Special = GREEN
-#         img[map_array == 75] = [0, 140, 255]    # Rocks = ORANGE
-#         img[map_array == 100] = [0, 0, 0]       # Obstacles = BLACK
-        
-#         print("🎨 Applied professional color theme")
-#         # ═══════════════════════════════════════════════════════════
-        
-        
-#         # ═══════════════════════════════════════════════════════════
-#         # DRAW PATH HISTORY (Yellow trail)
-#         # ═══════════════════════════════════════════════════════════
-#         try:
-#             path = list(rover_data['path'])
-#             if len(path) > 1:
-#                 for i in range(len(path) - 1):
-#                     # Get path points
-#                     x1, y1 = path[i]['x'], path[i]['y']
-#                     x2, y2 = path[i + 1]['x'], path[i + 1]['y']
-                    
-#                     # Convert to pixel coordinates
-#                     px1 = int((x1 - origin_x) / resolution)
-#                     py1 = int((y1 - origin_y) / resolution)
-#                     px2 = int((x2 - origin_x) / resolution)
-#                     py2 = int((y2 - origin_y) / resolution)
-                    
-#                     # Draw line segment (Yellow, 2 pixels thick)
-#                     if (0 <= px1 < width and 0 <= py1 < height and 
-#                         0 <= px2 < width and 0 <= py2 < height):
-#                         cv2.line(img, (px1, py1), (px2, py2), (0, 255, 255), 2)
-                
-#                 print(f"🛤️ Drew path: {len(path)} points")
-#         except Exception as e:
-#             print(f"⚠️ Path drawing error: {e}")
-#         # ═══════════════════════════════════════════════════════════
-        
-        
-#         # ═══════════════════════════════════════════════════════════
-#         # DRAW ROVER POSITION (Cyan dot with direction arrow)
-#         # ═══════════════════════════════════════════════════════════
-#         try:
-#             rover_x = rover_data['position']['x']
-#             rover_y = rover_data['position']['y']
-            
-#             # Convert rover position to pixel coordinates
-#             pixel_x = int((rover_x - origin_x) / resolution)
-#             pixel_y = int((rover_y - origin_y) / resolution)
-            
-#             # Check if rover is within map bounds
-#             if 0 <= pixel_x < width and 0 <= pixel_y < height:
-#                 # Draw outer circle (white outline)
-#                 cv2.circle(img, (pixel_x, pixel_y), 12, (255, 255, 255), 2)
-                
-#                 # Draw inner filled circle (cyan)
-#                 cv2.circle(img, (pixel_x, pixel_y), 10, (255, 255, 0), -1)
-                
-#                 # Draw center dot (black)
-#                 cv2.circle(img, (pixel_x, pixel_y), 3, (0, 0, 0), -1)
-                
-#                 # Try to draw direction arrow (if we have orientation)
-#                 try:
-#                     # You can get heading from odometry if available
-#                     # For now, just draw the rover marker
-#                     pass
-#                 except:
-#                     pass
-                
-#                 print(f"🤖 Rover drawn at pixel: ({pixel_x}, {pixel_y})")
-#             else:
-#                 print(f"⚠️ Rover out of map bounds: ({pixel_x}, {pixel_y})")
-                
-#         except Exception as e:
-#             print(f"⚠️ Rover marker error: {e}")
-#         # ═══════════════════════════════════════════════════════════
-        
-        
-#         # Flip vertically for correct orientation (ROS uses bottom-left origin)
-#         img = cv2.flip(img, 0)
-        
-#         # Encode as base64 JPEG with high quality
-#         _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-#         map_base64 = base64.b64encode(buffer).decode('utf-8')
-        
-#         # Store in slam_data
-#         slam_data['map_image'] = map_base64
-        
-#         # Emit to dashboard
-#         socketio.emit('map_update', {
-#             'map': map_base64,
-#             'width': width,
-#             'height': height,
-#             'rover_position': {
-#                 'x': rover_data['position']['x'],
-#                 'y': rover_data['position']['y']
-#             },
-#             'timestamp': time.time()
-#         })
-        
-#         print(f"🗺️ ✅ Map sent: {width}x{height} with rover marker")
-        
-#     except Exception as e:
-#         print(f"❌ Map processing error: {e}")
-#         import traceback
-#         traceback.print_exc()
 def process_map(msg):
     """
     Process occupancy grid map with ROVER-SHAPED MARKER + PERSISTENT PATH
@@ -789,6 +649,122 @@ def process_map(msg):
         import traceback
         traceback.print_exc()
 
+# def process_map(msg):
+#     """
+#     Process RTAB-Map occupancy grid with elegant colors (FIXED VERSION)
+#     """
+#     try:
+#         print("🗺️ Processing SLAM map from /rtabmap/grid_map")
+        
+#         width = msg.get('info', {}).get('width', 0)
+#         height = msg.get('info', {}).get('height', 0)
+#         data = msg.get('data', [])
+        
+#         if width == 0 or height == 0 or not data:
+#             print("⚠️ Invalid map data")
+#             return
+        
+#         # Get map metadata
+#         origin_x = msg.get('info', {}).get('origin', {}).get('position', {}).get('x', -60.0)
+#         origin_y = msg.get('info', {}).get('origin', {}).get('position', {}).get('y', -60.0)
+#         resolution = msg.get('info', {}).get('resolution', 0.1)
+        
+#         print(f"🗺️ Map: {width}x{height}, Origin: ({origin_x:.1f}, {origin_y:.1f}), Res: {resolution}m")
+        
+#         # Convert occupancy grid to numpy array
+#         map_array = np.array(data, dtype=np.int8).reshape((height, width))
+        
+#         # Create RGB image with elegant color scheme (BGR format for OpenCV)
+#         img = np.zeros((height, width, 3), dtype=np.uint8)
+        
+#         # ELEGANT SPACE-THEMED COLOR PALETTE:
+#         # Unknown areas (never scanned) - Deep midnight blue
+#         img[map_array == -1] = [90, 70, 50]      # BGR: Dark blue-purple (#32465A)
+        
+#         # Free space (explored, safe) - Moonlit silver-blue  
+#         img[map_array == 0] = [220, 210, 180]    # BGR: Pale moon silver (#B4D2DC)
+        
+#         # Semantic labels (if your system uses them)
+#         img[map_array == 25] = [180, 130, 255]   # Flags: Soft pink (#FF82B4)
+#         img[map_array == 50] = [140, 200, 100]   # Base: Mint green (#64C88C)
+#         img[map_array == 75] = [100, 160, 255]   # Rocks: Peach (#FFA064)
+        
+#         # Occupied space (obstacles, walls) - Deep space indigo
+#         img[map_array >= 90] = [60, 40, 30]      # BGR: Dark indigo (#1E283C)
+        
+#         print("🎨 Applied elegant color scheme")
+        
+#         # Draw path trail (elegant cyan)
+#         try:
+#             path = list(rover_data['path'])
+#             if len(path) > 1:
+#                 for i in range(len(path) - 1):
+#                     x1, y1 = path[i]['x'], path[i]['y']
+#                     x2, y2 = path[i + 1]['x'], path[i + 1]['y']
+                    
+#                     px1 = int((x1 - origin_x) / resolution)
+#                     py1 = int((y1 - origin_y) / resolution)
+#                     px2 = int((x2 - origin_x) / resolution)
+#                     py2 = int((y2 - origin_y) / resolution)
+                    
+#                     # Check bounds
+#                     if (0 <= px1 < width and 0 <= py1 < height and 
+#                         0 <= px2 < width and 0 <= py2 < height):
+#                         cv2.line(img, (px1, py1), (px2, py2), (255, 200, 100), 3)  # Elegant gold path
+                
+#                 print(f"🛤️ Drew path: {len(path)} points")
+#         except Exception as e:
+#             print(f"⚠️ Path drawing error: {e}")
+        
+#         # Draw rover marker (bright gold circle)
+#         try:
+#             rover_x = rover_data['position']['x']
+#             rover_y = rover_data['position']['y']
+            
+#             pixel_x = int((rover_x - origin_x) / resolution)
+#             pixel_y = int((rover_y - origin_y) / resolution)
+            
+#             if 0 <= pixel_x < width and 0 <= pixel_y < height:
+#                 # Rover body (bright white circle with gold outline)
+#                 cv2.circle(img, (pixel_x, pixel_y), 15, (255, 255, 255), -1)  # White fill
+#                 cv2.circle(img, (pixel_x, pixel_y), 15, (80, 180, 255), 3)    # Gold outline
+                
+#                 # Center dot
+#                 cv2.circle(img, (pixel_x, pixel_y), 4, (0, 0, 255), -1)  # Red center
+                
+#                 print(f"🤖 Rover drawn at ({pixel_x}, {pixel_y})")
+#         except Exception as e:
+#             print(f"⚠️ Rover marker error: {e}")
+        
+#         # Flip vertically (ROS coordinate system)
+#         img = cv2.flip(img, 0)
+        
+#         # Encode as JPEG
+#         _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+#         map_base64 = base64.b64encode(buffer).decode('utf-8')
+        
+#         slam_data['map_image'] = map_base64
+        
+#         # Emit to dashboard
+#         socketio.emit('map_update', {
+#             'map': map_base64,
+#             'width': width,
+#             'height': height,
+#             'rover_position': {
+#                 'x': rover_data['position']['x'],
+#                 'y': rover_data['position']['y']
+#             },
+#             'path_length': len(rover_data['path']),
+#             'timestamp': time.time()
+#         })
+        
+#         print(f"🗺️ ✅ Elegant map sent: {width}x{height}")
+        
+#     except Exception as e:
+#         print(f"❌ Map processing error: {e}")
+#         import traceback
+#         traceback.print_exc()
+
 
 def process_semantic_map(msg):
     """Process semantic map (detected objects from YOLO)"""
@@ -930,8 +906,8 @@ def on_open(ws):
         # ═══════════════════════════════════════════════════════════
         # NEW: SLAM TOPICS (ADDED)
         # ═══════════════════════════════════════════════════════════
-        {"topic": "/map", "type": "nav_msgs/OccupancyGrid"},
-        {"topic": "/semantic_map", "type": "std_msgs/String"},
+        {"topic": "/rtabmap/grid_map", "type": "nav_msgs/OccupancyGrid"},  
+        {"topic": "/semantic_detections", "type": "std_msgs/String"},      
         {"topic": "/mission_status", "type": "std_msgs/String"},
         {"topic": "/traversed_path", "type": "nav_msgs/Path"},
         # ═══════════════════════════════════════════════════════════
@@ -942,7 +918,7 @@ def on_open(ws):
             "op": "subscribe",
             "topic": topic_info["topic"],
             "type": topic_info["type"],
-            "throttle_rate": 50,
+            "throttle_rate": 500 if '/grid_map' in topic_info["topic"] else 100,
             "queue_length": 1
         }
         try:

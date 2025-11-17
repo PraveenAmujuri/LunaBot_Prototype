@@ -27,7 +27,8 @@ class MissionManager:
         # Subscribers
         rospy.Subscriber('/battery_level', Float32, self.battery_callback)
         rospy.Subscriber('/odom', Odometry, self.odom_callback)
-        rospy.Subscriber('/semantic_map', String, self.semantic_callback)
+        # rospy.Subscriber('/semantic_map', String, self.semantic_callback)
+        rospy.Subscriber('/semantic_detections', String, self.semantic_callback)
         rospy.Subscriber('/move_base/status', GoalStatusArray, self.goal_status_callback)
 
         # Mission state
