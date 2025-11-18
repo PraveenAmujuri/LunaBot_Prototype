@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-
-# COMPLETELY FIXED - AUTO RESTART DETECTION + GOAL CANCELLATION + SLAM
-# Worker-queue version: prevents Flask/SocketIO buffering by offloading heavy tasks
 import eventlet
 eventlet.monkey_patch()
 
@@ -17,8 +14,6 @@ from flask import Flask, render_template, jsonify
 from flask_socketio import SocketIO, emit
 from websocket import WebSocketApp
 from collections import deque
-import gc
-
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
 
@@ -26,15 +21,17 @@ from queue import Queue, Empty
 ROSBRIDGE_HOST = 'localhost'
 ROSBRIDGE_PORT = 9090
 
-# Flask setup
+# Flask + SocketIO
 app = Flask(__name__)
-socketio = SocketIO(app,
-                   cors_allowed_origins="*",
-                   async_mode='eventlet',
-                   logger=False,
-                   engineio_logger=False)
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode='eventlet',
+    logger=False,
+    engineio_logger=False
+)
 
-# Rover state - REAL DATA ONLY with restart detection
+# Rover state
 rover_data = {
     "position": {"x": 0.0, "y": 0.0, "z": 0.0},
     "last_position": {"x": 0.0, "y": 0.0, "z": 0.0},
@@ -56,12 +53,7 @@ activity_log = deque(maxlen=30)
 # SLAM data
 slam_data = {
     'map_image': None,
-    'semantic_map': {
-        'rocks': [],
-        'base': [],
-        'flags': [],
-        'antennas': []
-    },
+    'semantic_map': {'rocks': [], 'base': [], 'flags': [], 'antennas': []},
     'mission_status': {
         'battery': 100.0,
         'mode': 'EXPLORATION',
@@ -74,13 +66,22 @@ slam_data = {
     'path_history': []
 }
 
+# Queues and workers
+PROCESSING_QUEUE = Queue(maxsize=100)
+EMIT_QUEUE = Queue(maxsize=200)
+CPU_POOL = ThreadPoolExecutor(max_workers=2)
+_WORKERS_STARTED = False
+
+rosbridge_ws = None
+rosbridge_pub_ws = None
+publisher_connected = False
+
 
 def log_activity(message):
     try:
         timestamp = time.strftime("%H:%M:%S")
         log_entry = f"[{timestamp}] {message}"
         activity_log.append(log_entry)
-        # enqueue emit through EMIT_QUEUE in case socketio is busy
         try:
             EMIT_QUEUE.put_nowait(('activity_update', {'message': log_entry}))
         except Exception:
@@ -88,18 +89,6 @@ def log_activity(message):
         print(f"📝 {message}")
     except Exception as e:
         print(f"❌ Log activity error: {e}")
-
-
-# ROS WebSocket Connection
-rosbridge_ws = None
-rosbridge_pub_ws = None
-publisher_connected = False
-
-# Queues and workers
-PROCESSING_QUEUE = Queue(maxsize=100)   # heavy jobs: map / camera encoding (reduced)
-EMIT_QUEUE = Queue(maxsize=200)         # small outbound messages to dashboard (reduced)
-CPU_POOL = ThreadPoolExecutor(max_workers=2)  # /Tuing: 1-2 depending on CPU
-_WORKERS_STARTED = False
 
 
 def start_background_workers():
@@ -115,18 +104,16 @@ def start_background_workers():
                 if job is None:
                     break
                 job_type, payload = job
-                # submit to CPU pool so worker loop keeps draining the queue
                 CPU_POOL.submit(_process_job, job_type, payload)
             except Exception as e:
                 print("❌ processing_worker error:", e)
 
     def emit_worker():
-        # Per-event throttling: allow more frequent small events, throttle heavy ones
         DEFAULT_MIN_DELAY = 0.02
         EVENT_INTERVALS = {
-            'camera_update': 0.2,   # 5 Hz max for camera frames
-            'map_update': 1.0,      # 1 Hz max for maps
-            'semantic_update': 0.5  # 2 Hz max for semantic updates
+            'camera_update': 0.2,
+            'map_update': 1.0,
+            'semantic_update': 0.5
         }
         last_emit = {}
         while True:
@@ -172,7 +159,6 @@ def _process_job(job_type, payload):
         print("❌ _process_job error:", e)
 
 
-# ---------- Heavy processors (moved to background) ----------
 def _process_map_heavy(msg):
     try:
         width = msg.get('info', {}).get('width', 0)
@@ -196,10 +182,10 @@ def _process_map_heavy(msg):
         img[map_array == 75] = [0, 165, 255]
         img[map_array == 100] = [0, 0, 0]
 
-        # Draw path: downsample if too long
+        # Draw path (downsample if too long)
         path = list(rover_data['path'])
         if len(path) > 1:
-            step = max(1, len(path) // 200)  # /Tuing: reduce points for performance
+            step = max(1, len(path) // 200)
             for i in range(0, len(path) - 1, step):
                 p1 = path[i]
                 p2 = path[min(i + step, len(path) - 1)]
@@ -210,7 +196,7 @@ def _process_map_heavy(msg):
                 if (0 <= px1 < width and 0 <= py1 < height and 0 <= px2 < width and 0 <= py2 < height):
                     cv2.line(img, (px1, py1), (px2, py2), (0, 255, 255), 2)
 
-        # Draw simple rover marker
+        # Rover marker
         rover_x = rover_data['position']['x']
         rover_y = rover_data['position']['y']
         pixel_x = int((rover_x - origin_x) / resolution)
@@ -219,8 +205,7 @@ def _process_map_heavy(msg):
             cv2.circle(img, (pixel_x, pixel_y), 4, (255, 255, 0), -1)
 
         img = cv2.flip(img, 0)
-        # Lower map JPEG quality to reduce bandwidth and CPU
-        _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 60])  # reduced quality
+        _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 60])
         map_base64 = base64.b64encode(buffer).decode('utf-8')
 
         payload = {
@@ -277,7 +262,6 @@ def _process_camera_heavy(msg):
                     new_w = int(img_bgr.shape[1] * scale)
                     new_h = int(img_bgr.shape[0] * scale)
                     img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
-                # Lower camera JPEG quality to reduce encoding time and bandwidth
                 _, jpg_data = cv2.imencode('.jpg', img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 50])
                 base64_data = base64.b64encode(jpg_data.tobytes()).decode('utf-8')
             except Exception as e:
@@ -306,7 +290,6 @@ def _process_camera_heavy(msg):
         print("❌ _process_camera_heavy error:", e)
 
 
-# ---------- lightweight wrappers and other handlers ----------
 def connect_rosbridge_publisher():
     global rosbridge_pub_ws, publisher_connected
     try:
@@ -331,12 +314,7 @@ def publish_to_ros(topic, msg_type, message):
             print(f"❌ Cannot publish to {topic} - no ROS connection")
             return False
 
-        ros_message = {
-            "op": "publish",
-            "topic": topic,
-            "msg": message
-        }
-
+        ros_message = {"op": "publish", "topic": topic, "msg": message}
         rosbridge_pub_ws.send(json.dumps(ros_message, separators=(',', ':')))
         print(f"📤 Published to {topic}: {message}")
         log_activity(f"📤 Sent to ROS: {topic}")
@@ -382,11 +360,7 @@ def stop_rover():
 
 def clear_costmaps():
     try:
-        service_msg = {
-            "op": "call_service",
-            "service": "/move_base/clear_costmaps",
-            "args": {}
-        }
+        service_msg = {"op": "call_service", "service": "/move_base/clear_costmaps", "args": {}}
         if publisher_connected and rosbridge_pub_ws:
             rosbridge_pub_ws.send(json.dumps(service_msg))
             print("✅ Costmap clear requested")
@@ -407,7 +381,7 @@ def detect_unity_restart(new_x, new_y, new_z):
         distance = math.sqrt(dx**2 + dy**2)
         if distance > 3.0 and not rover_data['position_jump_detected']:
             print("="*60)
-            print(f"🔄 UNITY RESTART DETECTED!")
+            print("🔄 UNITY RESTART DETECTED!")
             print(f"   Position jump: {distance:.2f}m")
             print(f"   Old: ({last_x:.1f}, {last_y:.1f})")
             print(f"   New: ({new_x:.1f}, {new_y:.1f})")
@@ -416,7 +390,7 @@ def detect_unity_restart(new_x, new_y, new_z):
             rover_data['position_jump_detected'] = True
             rover_data['restart_count'] += 1
 
-            log_activity(f"🔄 UNITY RESTART #{rover_data['restart_count']} DETECTED!")
+            log_activity(f"🔄 RESTART #{rover_data['restart_count']} DETECTED!")
             log_activity(f"   Position jump: {distance:.1f}m")
 
             print("🛑 Stopping rover...")
@@ -442,7 +416,7 @@ def detect_unity_restart(new_x, new_y, new_z):
             except Exception:
                 pass
 
-            print("✅ Unity restart handling complete!")
+            print("✅ Restart handling complete!")
             log_activity("✅ Reset complete - ready for new commands")
 
             def reset_flag():
@@ -458,7 +432,6 @@ def detect_unity_restart(new_x, new_y, new_z):
         return False
 
 
-# ---------- ROS message handlers (lightweight) ----------
 def on_message(ws, message):
     try:
         data = json.loads(message)
@@ -467,7 +440,6 @@ def on_message(ws, message):
             return
         msg = data.get("msg", {})
 
-        # Lightweight routing: enqueue heavy tasks
         if topic == "/rover_camera/image_raw":
             try:
                 PROCESSING_QUEUE.put_nowait(('camera', msg))
@@ -506,7 +478,7 @@ def on_message(ws, message):
 
 def process_odometry(msg):
     try:
-        print("🗺️ Processing REAL odometry")
+        print("🗺️ Processing odometry")
         pose_msg = msg.get('pose', {})
         if 'pose' in pose_msg:
             position = pose_msg['pose'].get('position', {})
@@ -535,8 +507,8 @@ def process_odometry(msg):
         linear_x = float(linear_vel.get('x', 0.0))
         angular_z = float(angular_vel.get('z', 0.0))
 
-        print(f"🗺️ ✅ REAL position: ({new_x:.3f}, {new_y:.3f})")
-        print(f"🗺️ ✅ REAL velocity: L={linear_x:.3f}, A={angular_z:.3f}")
+        print(f"🗺️ ✅ position: ({new_x:.3f}, {new_y:.3f})")
+        print(f"🗺️ ✅ velocity: L={linear_x:.3f}, A={angular_z:.3f}")
 
         rover_data['position']['x'] = new_x
         rover_data['position']['y'] = new_y
@@ -559,7 +531,7 @@ def process_odometry(msg):
             'real_movement': True,
             'restart_count': rover_data['restart_count'],
             'timestamp': time.time(),
-            'data_source': 'REAL_ROS_ODOMETRY'
+            'data_source': 'ROS_ODOMETRY'
         }
 
         try:
@@ -567,7 +539,7 @@ def process_odometry(msg):
         except Exception:
             pass
 
-        print(f"🗺️ ✅ REAL status sent: ({new_x:.2f}, {new_y:.2f})")
+        print(f"🗺️ ✅ status sent: ({new_x:.2f}, {new_y:.2f})")
 
     except Exception as e:
         print(f"❌ Odometry error: {e}")
@@ -684,7 +656,7 @@ def process_mission_status(msg):
         if battery < 15 and mode == "EMERGENCY_RETURN":
             log_activity(f"🔋 EMERGENCY! Battery {battery:.0f}% - Returning to base")
         elif mode == "BACKTRACKING":
-            log_activity(f"🔙 Backtracking to base")
+            log_activity("🔙 Backtracking to base")
 
     except Exception as e:
         print(f"❌ Mission status error: {e}")
@@ -721,11 +693,10 @@ def process_path_history(msg):
         print(f"❌ Path history error: {e}")
 
 
-# ---------- ROS connection & subscribe ----------
 def on_open(ws):
     global rosbridge_ws
     rosbridge_ws = ws
-    print("🌐 ✅ ROS connected - REAL DATA ONLY")
+    print("🌐 ✅ ROS connected")
     log_activity("🌐 ROS connected with restart detection")
     rover_data['connected'] = True
 
@@ -770,7 +741,7 @@ def rosbridge_client():
     global rosbridge_ws
     while True:
         try:
-            print(f"🔄 Connecting to REAL ROS at {ROSBRIDGE_HOST}:{ROSBRIDGE_PORT}")
+            print(f"🔄 Connecting to ROS at {ROSBRIDGE_HOST}:{ROSBRIDGE_PORT}")
             ws = WebSocketApp(
                 f"ws://{ROSBRIDGE_HOST}:{ROSBRIDGE_PORT}",
                 on_message=on_message,
@@ -789,10 +760,9 @@ def rosbridge_client():
         time.sleep(5)
 
 
-# ---------- Socket handlers ----------
 @socketio.on('connect')
 def handle_connect():
-    print("🌐 ✅ Dashboard connected - AUTO RESTART DETECTION")
+    print("🌐 ✅ Dashboard connected")
     log_activity("🌐 Dashboard connected with restart detection")
 
     emit('initial_state', {
@@ -856,19 +826,13 @@ def handle_navigation_goal(data):
     try:
         goal = data.get('goal', {})
         position = goal.get('position', {})
-
         x = float(position.get('x', 0.0))
         y = float(position.get('y', 0.0))
 
         goal_msg = {
-            'header': {
-                'frame_id': 'map',
-                'stamp': {'secs': int(time.time()), 'nsecs': 0}
-            },
-            'pose': {
-                'position': {'x': x, 'y': y, 'z': 0.0},
-                'orientation': {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0}
-            }
+            'header': {'frame_id': 'map', 'stamp': {'secs': int(time.time()), 'nsecs': 0}},
+            'pose': {'position': {'x': x, 'y': y, 'z': 0.0},
+                     'orientation': {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0}}
         }
 
         success = publish_to_ros('/move_base_simple/goal', 'geometry_msgs/PoseStamped', goal_msg)
@@ -904,7 +868,6 @@ def handle_reset_navigation():
         emit('reset_error', {'error': f'Reset failed: {e}'})
 
 
-# ---------- Flask routes ----------
 @app.route('/')
 def dashboard():
     return render_template('index.html')
@@ -913,7 +876,7 @@ def dashboard():
 @app.route('/api/status')
 def api_status():
     return jsonify({
-        'status': 'REAL_DATA_WITH_RESTART_DETECTION',
+        'status': 'ROS_DATA_WITH_RESTART_DETECTION',
         'rover_data': {
             'position': rover_data['position'],
             'velocity': rover_data['velocity'],
@@ -925,11 +888,7 @@ def api_status():
             'path_length': len(rover_data['path']),
             'restart_count': rover_data['restart_count']
         },
-        'features': {
-            'restart_detection': True,
-            'auto_goal_cancel': True,
-            'auto_costmap_clear': True
-        },
+        'features': {'restart_detection': True, 'auto_goal_cancel': True, 'auto_costmap_clear': True},
         'timestamp': time.time()
     })
 
@@ -943,11 +902,7 @@ def api_reset_navigation():
         rover_data['path'].clear()
         rover_data['mode'] = "IDLE"
 
-        return jsonify({
-            'status': 'success',
-            'message': 'Navigation reset complete',
-            'timestamp': time.time()
-        })
+        return jsonify({'status': 'success', 'message': 'Navigation reset complete', 'timestamp': time.time()})
     except Exception as e:
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
@@ -989,7 +944,6 @@ def api_mission_status():
     return jsonify(slam_data['mission_status'])
 
 
-# Publisher thread init
 def init_publisher():
     def publisher_thread():
         global publisher_connected
@@ -1020,41 +974,42 @@ def init_publisher():
     thread.start()
 
 
-# MAIN
 if __name__ == '__main__':
-    print("🚀 UNITY RESTART DETECTION Dashboard - REAL ROS DATA + SLAM")
-    log_activity("🚀 Dashboard with AUTO RESTART DETECTION + SLAM starting")
+    print("🚀 RESTART DETECTION Dashboard - ROS DATA + SLAM")
+    log_activity("🚀 Dashboard with restart detection + SLAM starting")
 
     start_background_workers()
     socketio.start_background_task(target=rosbridge_client)
     init_publisher()
 
     print("="*60)
-    print("🤖 AUTO RESTART DETECTION DASHBOARD + SLAM!")
+    print("🤖 RESTART DETECTION DASHBOARD + SLAM")
     print("="*60)
     print(f"🌐 URL: http://172.22.54.111:5000")
-    print(f"📷 Camera: REAL ROS frames")
-    print(f"🗺️ Position: REAL /odom data")
+    print(f"📷 Camera: ROS frames")
+    print(f"🗺️ Position: /odom data")
     print(f"🔄 Restart Detection: ENABLED (3m threshold)")
     print(f"🛑 Auto Goal Cancel: ENABLED")
     print(f"🧹 Auto Costmap Clear: ENABLED")
     print("="*60)
-    print("🗺️ NEW SLAM FEATURES:")
+    print("🗺️ SLAM FEATURES:")
     print("  ✅ Live occupancy grid map")
-    print("  ✅ YOLO object detection (rocks, base, flags)")
+    print("  ✅ Object detection (rocks, base, flags)")
     print("  ✅ Path history tracking")
     print("  ✅ Mission status monitoring")
     print("  ✅ Battery level display")
     print("  ✅ Emergency return system")
     print("="*60)
-    print(f"✅ 100% REAL ROS DATA")
+    print(f"✅ ROS DATA mode")
     print("="*60)
 
     try:
-        socketio.run(app,
-                     host='172.22.54.111',
-                     port=5000,
-                     debug=False,
-                     use_reloader=False)
+        socketio.run(
+            app,
+            host='172.22.54.111',
+            port=5000,
+            debug=False,
+            use_reloader=False
+        )
     except KeyboardInterrupt:
         print("\n🛑 Dashboard stopped")
