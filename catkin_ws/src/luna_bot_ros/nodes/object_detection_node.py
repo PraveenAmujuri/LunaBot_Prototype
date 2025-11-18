@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-YOLOv8 Lunar Detector - Custom model for lunar terrain analysis.
-Detects safe zones, obstacles, and caution areas from camera input.
+YOLOv8 Lunar Detector - runs YOLO inference and publishes detections to /yolo_detections.
 """
 
 import os
@@ -17,15 +16,17 @@ from inference_sdk import InferenceHTTPClient
 
 
 class YoloLunarDetector:
-    def __init__(self):
-        rospy.loginfo("YOLOv8 Lunar Detector initializing...")
+    """Subscribes to camera topics, runs YOLO inference, publishes detections."""
 
-        # Load model configuration
+    def __init__(self):
+        rospy.loginfo("YOLOv8 Lunar Detector starting")
+
+        # Model config
         cache_dir = os.path.expanduser("~/.luna_bot_models")
         config_path = os.path.join(cache_dir, "model_config.json")
 
         if not os.path.exists(config_path):
-            rospy.logerr("Model config JSON not found. Run LunaBotModelSetup first.")
+            rospy.logerr("Model config not found; run LunaBotModelSetup")
             self.yolo_available = False
             return
 
@@ -36,17 +37,17 @@ class YoloLunarDetector:
         self.api_key = config.get("api_key")
 
         if not self.model_id or not self.api_key:
-            rospy.logerr("Model ID or API key missing in config JSON.")
+            rospy.logerr("Model ID or API key missing in config")
             self.yolo_available = False
             return
 
-        # Initialize YOLO inference client
+        # Inference client
         self.yolo_client = InferenceHTTPClient(
             api_url="https://detect.roboflow.com",
             api_key=self.api_key
         )
 
-        # Detection class categories
+        # Class sets (used to tag detections)
         self.safe_classes = {"clear path", "austroads", "flag", "antenna"}
         self.obstacle_classes = {"rocks", "objects", "space capsule"}
         self.caution_classes = {"shadows"}
@@ -54,10 +55,10 @@ class YoloLunarDetector:
         self.bridge = CvBridge()
         self.yolo_available = True
 
-        # Publisher for detections
+        # Publisher
         self.detection_pub = rospy.Publisher("/yolo_detections", String, queue_size=10)
 
-        # Subscribe to camera image topics
+        # Camera topics
         image_topics = [
             "/camera/image_raw",
             "/usb_cam/image_raw",
@@ -73,31 +74,27 @@ class YoloLunarDetector:
 
         for topic in image_topics:
             rospy.Subscriber(topic, Image, self.image_callback)
-
         for topic in compressed_topics:
             rospy.Subscriber(topic, CompressedImage, self.compressed_callback)
 
-        # Image buffer and threading lock
+        # Buffer & thread
         self.current_image = None
         self.image_lock = threading.Lock()
 
         # Background detection thread
-        self.detection_thread = threading.Thread(
-            target=self.detection_loop,
-            daemon=True
-        )
+        self.detection_thread = threading.Thread(target=self.detection_loop, daemon=True)
         self.detection_thread.start()
 
-        rospy.loginfo("YOLOv8 Lunar Detector ready.")
+        rospy.loginfo("YOLOv8 Lunar Detector ready")
         rospy.loginfo(f"Safe classes: {sorted(self.safe_classes)}")
         rospy.loginfo(f"Obstacle classes: {sorted(self.obstacle_classes)}")
         rospy.loginfo(f"Caution classes: {sorted(self.caution_classes)}")
 
-    # ------------------------------------------------------------------
-    # Image Handlers
-    # ------------------------------------------------------------------
+    # --------------------
+    # Image handlers
+    # --------------------
     def image_callback(self, msg):
-        """Handle uncompressed image messages."""
+        """Handle uncompressed Image messages."""
         try:
             if "jpeg" in msg.encoding.lower() or "jpg" in msg.encoding.lower():
                 np_arr = np.frombuffer(msg.data, np.uint8)
@@ -125,12 +122,12 @@ class YoloLunarDetector:
         except Exception as e:
             rospy.logwarn_throttle(5, f"Compressed image callback error: {e}")
 
-    # ------------------------------------------------------------------
-    # Detection
-    # ------------------------------------------------------------------
+    # --------------------
+    # Detection loop
+    # --------------------
     def detection_loop(self):
-        """Run inference in a background loop."""
-        rate = rospy.Rate(2)  # 2 Hz
+        """Run inference at a steady rate and publish detections."""
+        rate = rospy.Rate(2)  # Tuning note: increase for faster detection (higher CPU/network usage)
         while not rospy.is_shutdown():
             with self.image_lock:
                 img = self.current_image.copy() if self.current_image is not None else None
@@ -140,7 +137,6 @@ class YoloLunarDetector:
                 continue
 
             detections = self.detect_objects(img)
-
             if detections is not None:
                 msg = String()
                 msg.data = json.dumps(detections)
@@ -149,9 +145,9 @@ class YoloLunarDetector:
             rate.sleep()
 
     def detect_objects(self, img):
-        """Perform YOLO inference using the configured model."""
+        """Run inference using configured remote client and format results."""
         try:
-            tmp_path = "/tmp/temp_roboflow_infer.jpg"
+            tmp_path = "/tmp/temp_roboflow_infer.jpg"  # Local temp file for inference
             cv2.imwrite(tmp_path, img)
             result = self.yolo_client.infer(tmp_path, model_id=self.model_id)
             os.remove(tmp_path)
@@ -180,14 +176,14 @@ class YoloLunarDetector:
                     }
                     detections.append(detection)
 
-                # Summary logs
+                # Log summary
                 obstacles = [d["class"] for d in detections if d["is_obstacle"]]
                 safe_zones = [d["class"] for d in detections if d["is_safe"]]
 
                 if obstacles:
-                    rospy.loginfo_throttle(3, f"Obstacles detected: {obstacles}")
+                    rospy.loginfo_throttle(3, f"Obstacles: {obstacles}")
                 elif safe_zones:
-                    rospy.loginfo_throttle(5, f"Safe areas detected: {safe_zones}")
+                    rospy.loginfo_throttle(5, f"Safe areas: {safe_zones}")
                 else:
                     rospy.loginfo_throttle(5, f"Detections: {[d['class'] for d in detections]}")
 
@@ -201,7 +197,6 @@ class YoloLunarDetector:
 def main():
     rospy.init_node("yolo_lunar_detector")
     detector = YoloLunarDetector()
-
     if detector.yolo_available:
         rospy.spin()
 

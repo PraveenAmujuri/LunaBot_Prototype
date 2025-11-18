@@ -18,6 +18,9 @@ public class RosBridgeClient : MonoBehaviour
 
     void Start()
     {
+            Application.targetFrameRate = 60;
+    QualitySettings.vSyncCount = 0;
+    Time.fixedDeltaTime = 0.02f;
         ws = new WebSocket(rosbridgeUrl);
 
         ws.OnOpen += (s, e) =>

@@ -72,6 +72,7 @@
     <Compile Include="Assets\Scripts\UnityMainThreadDispatcher.cs" />
     <Compile Include="Assets\Scripts\RoverCameraLight.cs" />
     <Compile Include="Assets\Stagit\SkyboxEarthPlanets\script\skyboxspace_mouselook_v1.cs" />
+    <Compile Include="Assets\Scripts\FPSDisplay.cs" />
     <Compile Include="Assets\Scripts\LiveCameraPublisher.cs" />
     <Compile Include="Assets\Stagit\SkyboxEarthPlanets\script\skyboxspace_demo_v1.cs" />
     <Compile Include="Assets\Scripts\NewBehaviourScript.cs" />

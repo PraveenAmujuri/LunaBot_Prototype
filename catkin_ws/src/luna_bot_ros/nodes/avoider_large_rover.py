@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 
 """
-Simple Continuous Avoider - Turns gently until all lasers clear.
+LargeRoverAvoider
+Simple 5-region LaserScan based obstacle avoidance.
 """
 
 import rospy
 
 
 class LargeRoverAvoider:
-    """Continuous obstacle avoidance behavior."""
+    """Reactive obstacle avoidance using 5 LaserScan regions."""
 
     def __init__(self, vel_obj, obstacle_threshold=10.0,
                  normal_lin_vel=0.3, avoid_lin_vel=0.2, avoid_ang_vel=0.4):
         """
-        :param obstacle_threshold: Distance to start avoiding (m)
-        :param normal_lin_vel: Normal forward speed (m/s)
-        :param avoid_lin_vel: Speed while avoiding (m/s)
-        :param avoid_ang_vel: Turn rate while avoiding (rad/s)
+        Initialize parameters and state.
+
+        Tuning notes:
+            obstacle_threshold : Increase = more cautious, Decrease = more aggressive
+            normal_lin_vel     : Forward speed when clear
+            avoid_lin_vel      : Forward speed during avoidance (keep low for stability)
+            avoid_ang_vel      : Turn rate during avoidance (higher = sharper turns)
         """
         self.vel_obj = vel_obj
         self.OBSTACLE_DIST = obstacle_threshold
@@ -24,22 +28,21 @@ class LargeRoverAvoider:
         self.AVOID_LIN_VEL = avoid_lin_vel
         self.AVOID_ANG_VEL = avoid_ang_vel
 
-        # Laser data storage
+        # Laser region distance placeholders
         self.front_dist = 999
         self.left_dist = 999
         self.right_dist = 999
         self.front_left_dist = 999
         self.front_right_dist = 999
 
-        # Avoidance state
         self.avoiding = False
 
-        rospy.loginfo("Simple Continuous Avoider initialized")
-        rospy.loginfo(f"Safe distance: {obstacle_threshold} m")
-        rospy.loginfo("Turning until all laser regions are clear")
+        rospy.loginfo("LargeRoverAvoider ready")
 
     def identify_regions(self, scan):
-        """Split laser scan into 5 regions and record minimum distances."""
+        """
+        Split LaserScan into 5 regions and extract min distances.
+        """
         ranges = scan.ranges
         num_rays = len(ranges)
         if num_rays == 0:
@@ -48,6 +51,7 @@ class LargeRoverAvoider:
         region_size = num_rays // 5
 
         def get_min_distance(ray_list, default=999):
+            # Ignore out-of-range / inf values
             valid = [r for r in ray_list if 0 < r < 100 and r != float('inf')]
             return min(valid) if valid else default
 
@@ -58,7 +62,15 @@ class LargeRoverAvoider:
         self.front_right_dist = get_min_distance(ranges[4 * region_size:num_rays])
 
     def avoid(self, goal_direction=0):
-        """Obstacle avoidance logic: turns until all laser regions are clear."""
+        """
+        Compute avoidance Twist based on region distances.
+
+        Tuning note:
+            goal_direction :
+                <=0 → prefer left turn,
+                >0  → prefer right turn
+                (used only when both sides look equal)
+        """
         obstacles_detected = (
             self.front_dist < self.OBSTACLE_DIST or
             self.front_left_dist < self.OBSTACLE_DIST or
@@ -73,21 +85,24 @@ class LargeRoverAvoider:
             left_space = min(self.left_dist, self.front_left_dist)
             right_space = min(self.right_dist, self.front_right_dist)
 
+            # Direction choice
             if left_space > right_space + 2.0:
-                turn_direction = "LEFT"
                 angular_vel = self.AVOID_ANG_VEL
+                turn_direction = "LEFT"
             elif right_space > left_space + 2.0:
-                turn_direction = "RIGHT"
                 angular_vel = -self.AVOID_ANG_VEL
+                turn_direction = "RIGHT"
             else:
+                # Fall back to goal hint
                 if goal_direction <= 0:
-                    turn_direction = "LEFT"
                     angular_vel = self.AVOID_ANG_VEL
+                    turn_direction = "LEFT"
                 else:
-                    turn_direction = "RIGHT"
                     angular_vel = -self.AVOID_ANG_VEL
+                    turn_direction = "RIGHT"
 
-            rospy.loginfo_throttle(0.5,
+            rospy.loginfo_throttle(
+                0.5,
                 f"Avoiding {turn_direction} "
                 f"(F:{self.front_dist:.1f} FL:{self.front_left_dist:.1f} "
                 f"FR:{self.front_right_dist:.1f} L:{self.left_dist:.1f} R:{self.right_dist:.1f})"
@@ -97,11 +112,11 @@ class LargeRoverAvoider:
             self.vel_obj.angular.z = angular_vel
             return self.vel_obj
 
-        else:
-            if self.avoiding:
-                rospy.loginfo("Path clear. Resuming normal speed.")
-                self.avoiding = False
+        # Path clear
+        if self.avoiding:
+            rospy.loginfo("Path clear")
+            self.avoiding = False
 
-            self.vel_obj.linear.x = self.NORMAL_LIN_VEL
-            self.vel_obj.angular.z = 0.0
-            return self.vel_obj
+        self.vel_obj.linear.x = self.NORMAL_LIN_VEL
+        self.vel_obj.angular.z = 0.0
+        return self.vel_obj

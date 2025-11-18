@@ -2,9 +2,12 @@
 <package format="2">
   <name>luna_bot_ros</name>
   <version>1.0.0</version>
-  <description>ROS 1 package for the LunaBot.</description>
-  <maintainer email="user@example.com">Your Name</maintainer>
+  <description>ROS 1 package for the LunaBot</description>
+
+  <maintainer email="saipraveenamujuri@gmail.com">Praveen Amujuri</maintainer>
   <license>Apache-2.0</license>
+
+  <url type="homepage">https://github.com/PraveenAmujuri/LunaBot_Prototype</url>
 
   <buildtool_depend>catkin</buildtool_depend>
 
@@ -14,6 +17,10 @@
   <build_depend>geometry_msgs</build_depend>
   <build_depend>nav_msgs</build_depend>
   <build_depend>sensor_msgs</build_depend>
+  <build_depend>visualization_msgs</build_depend>
+  <build_depend>tf</build_depend>
+  <build_depend>cv_bridge</build_depend>
+  <build_depend>actionlib_msgs</build_depend>
 
   <exec_depend>message_runtime</exec_depend>
   <exec_depend>rospy</exec_depend>
@@ -21,4 +28,8 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>tf</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>actionlib_msgs</exec_depend>
 </package>
