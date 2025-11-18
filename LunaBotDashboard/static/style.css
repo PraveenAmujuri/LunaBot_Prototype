@@ -50,7 +50,7 @@ body {
 .hero-description { font-size: 1.1rem; color: var(--text-secondary); line-height: 1.6; margin-bottom: 2.5rem; }
 .rover-container { perspective: 1000px; }
 .rover-image { width: 550px; filter: drop-shadow(0 0 25px rgba(197, 163, 71, 0.15)); }
-.launch-button { position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 2; padding: 12px 24px; background-color: var(--primary-accent); color: var(--bg-dark); text-decoration: none; font-weight: 600; border-radius: 50px; transition: all 0.3s ease; box-shadow: 0 4px 20px rgba(197, 163, 71, 0.3); }
+.launch-button { position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 9999; pointer-events: auto; padding: 12px 24px; background-color: var(--primary-accent); color: var(--bg-dark); text-decoration: none; font-weight: 600; border-radius: 50px; transition: all 0.3s ease; box-shadow: 0 4px 20px rgba(197, 163, 71, 0.3); }
 .launch-button:hover { transform: translateX(-50%) scale(1.05); box-shadow: 0 6px 25px rgba(197, 163, 71, 0.4); }
 
 .sticky-header { position: sticky; top: 0; width: 100%; z-index: 100; display: flex; justify-content: space-between; align-items: center; padding: 15px 40px; background: rgba(13, 17, 23, 0.8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid var(--card-border); }

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 # COMPLETELY FIXED - AUTO RESTART DETECTION + GOAL CANCELLATION + SLAM
+# Worker-queue version: prevents Flask/SocketIO buffering by offloading heavy tasks
 import eventlet
 eventlet.monkey_patch()
 
@@ -18,20 +19,20 @@ from websocket import WebSocketApp
 from collections import deque
 import gc
 
+from concurrent.futures import ThreadPoolExecutor
+from queue import Queue, Empty
 
 # Configuration
 ROSBRIDGE_HOST = 'localhost'
 ROSBRIDGE_PORT = 9090
 
-
 # Flask setup
 app = Flask(__name__)
-socketio = SocketIO(app, 
-                   cors_allowed_origins="*", 
+socketio = SocketIO(app,
+                   cors_allowed_origins="*",
                    async_mode='eventlet',
                    logger=False,
                    engineio_logger=False)
-
 
 # Rover state - REAL DATA ONLY with restart detection
 rover_data = {
@@ -49,17 +50,13 @@ rover_data = {
     "restart_count": 0
 }
 
-
 # Activity log
 activity_log = deque(maxlen=30)
 
-
-# ═══════════════════════════════════════════════════════════════════
-# NEW: SLAM DATA (ADDED - doesn't touch existing code)
-# ═══════════════════════════════════════════════════════════════════
+# SLAM data
 slam_data = {
-    'map_image': None,  # Base64 encoded map image
-    'semantic_map': {   # Detected objects
+    'map_image': None,
+    'semantic_map': {
         'rocks': [],
         'base': [],
         'flags': [],
@@ -74,17 +71,20 @@ slam_data = {
         'distance_to_base': 0.0,
         'path_length': 0
     },
-    'path_history': []  # Traversed path for backtracking
+    'path_history': []
 }
 
 
 def log_activity(message):
-    """Real activity logging only"""
     try:
         timestamp = time.strftime("%H:%M:%S")
         log_entry = f"[{timestamp}] {message}"
         activity_log.append(log_entry)
-        socketio.emit('activity_update', {'message': log_entry})
+        # enqueue emit through EMIT_QUEUE in case socketio is busy
+        try:
+            EMIT_QUEUE.put_nowait(('activity_update', {'message': log_entry}))
+        except Exception:
+            pass
         print(f"📝 {message}")
     except Exception as e:
         print(f"❌ Log activity error: {e}")
@@ -95,9 +95,219 @@ rosbridge_ws = None
 rosbridge_pub_ws = None
 publisher_connected = False
 
+# Queues and workers
+PROCESSING_QUEUE = Queue(maxsize=100)   # heavy jobs: map / camera encoding (reduced)
+EMIT_QUEUE = Queue(maxsize=200)         # small outbound messages to dashboard (reduced)
+CPU_POOL = ThreadPoolExecutor(max_workers=2)  # /Tuing: 1-2 depending on CPU
+_WORKERS_STARTED = False
 
+
+def start_background_workers():
+    global _WORKERS_STARTED
+    if _WORKERS_STARTED:
+        return
+    _WORKERS_STARTED = True
+
+    def processing_worker():
+        while True:
+            try:
+                job = PROCESSING_QUEUE.get()
+                if job is None:
+                    break
+                job_type, payload = job
+                # submit to CPU pool so worker loop keeps draining the queue
+                CPU_POOL.submit(_process_job, job_type, payload)
+            except Exception as e:
+                print("❌ processing_worker error:", e)
+
+    def emit_worker():
+        # Per-event throttling: allow more frequent small events, throttle heavy ones
+        DEFAULT_MIN_DELAY = 0.02
+        EVENT_INTERVALS = {
+            'camera_update': 0.2,   # 5 Hz max for camera frames
+            'map_update': 1.0,      # 1 Hz max for maps
+            'semantic_update': 0.5  # 2 Hz max for semantic updates
+        }
+        last_emit = {}
+        while True:
+            try:
+                item = EMIT_QUEUE.get(timeout=1.0)
+                if item is None:
+                    break
+                event, payload = item
+                try:
+                    now = time.time()
+                    min_delay = EVENT_INTERVALS.get(event, DEFAULT_MIN_DELAY)
+                    elapsed = now - last_emit.get(event, 0.0)
+                    if elapsed < min_delay:
+                        time.sleep(min_delay - elapsed)
+                    socketio.emit(event, payload)
+                    last_emit[event] = time.time()
+                except Exception as e:
+                    print("❌ emit_worker error:", e)
+            except Empty:
+                continue
+            except Exception as e:
+                print("❌ emit_worker outer error:", e)
+
+    threading.Thread(target=processing_worker, daemon=True).start()
+    threading.Thread(target=emit_worker, daemon=True).start()
+
+
+def _process_job(job_type, payload):
+    try:
+        if job_type == 'map':
+            _process_map_heavy(payload)
+        elif job_type == 'camera':
+            _process_camera_heavy(payload)
+        elif job_type == 'semantic':
+            process_semantic_map(payload)
+        elif job_type == 'mission_status':
+            process_mission_status(payload)
+        elif job_type == 'path_history':
+            process_path_history(payload)
+        else:
+            print("⚠️ Unknown job type:", job_type)
+    except Exception as e:
+        print("❌ _process_job error:", e)
+
+
+# ---------- Heavy processors (moved to background) ----------
+def _process_map_heavy(msg):
+    try:
+        width = msg.get('info', {}).get('width', 0)
+        height = msg.get('info', {}).get('height', 0)
+        data = msg.get('data', [])
+        if width == 0 or height == 0 or not data:
+            return
+
+        origin_x = msg.get('info', {}).get('origin', {}).get('position', {}).get('x', -60.0)
+        origin_y = msg.get('info', {}).get('origin', {}).get('position', {}).get('y', -60.0)
+        resolution = msg.get('info', {}).get('resolution', 0.1)
+
+        map_array = np.array(data, dtype=np.int8).reshape((height, width))
+        img = np.zeros((height, width, 3), dtype=np.uint8)
+
+        # Color mapping (BGR)
+        img[map_array == -1] = [180, 180, 180]
+        img[map_array == 0] = [255, 255, 255]
+        img[map_array == 25] = [255, 0, 255]
+        img[map_array == 50] = [0, 255, 0]
+        img[map_array == 75] = [0, 165, 255]
+        img[map_array == 100] = [0, 0, 0]
+
+        # Draw path: downsample if too long
+        path = list(rover_data['path'])
+        if len(path) > 1:
+            step = max(1, len(path) // 200)  # /Tuing: reduce points for performance
+            for i in range(0, len(path) - 1, step):
+                p1 = path[i]
+                p2 = path[min(i + step, len(path) - 1)]
+                px1 = int((p1['x'] - origin_x) / resolution)
+                py1 = int((p1['y'] - origin_y) / resolution)
+                px2 = int((p2['x'] - origin_x) / resolution)
+                py2 = int((p2['y'] - origin_y) / resolution)
+                if (0 <= px1 < width and 0 <= py1 < height and 0 <= px2 < width and 0 <= py2 < height):
+                    cv2.line(img, (px1, py1), (px2, py2), (0, 255, 255), 2)
+
+        # Draw simple rover marker
+        rover_x = rover_data['position']['x']
+        rover_y = rover_data['position']['y']
+        pixel_x = int((rover_x - origin_x) / resolution)
+        pixel_y = int((rover_y - origin_y) / resolution)
+        if 0 <= pixel_x < width and 0 <= pixel_y < height:
+            cv2.circle(img, (pixel_x, pixel_y), 4, (255, 255, 0), -1)
+
+        img = cv2.flip(img, 0)
+        # Lower map JPEG quality to reduce bandwidth and CPU
+        _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 60])  # reduced quality
+        map_base64 = base64.b64encode(buffer).decode('utf-8')
+
+        payload = {
+            'map': map_base64,
+            'width': width,
+            'height': height,
+            'rover_position': {'x': rover_x, 'y': rover_y},
+            'path_length': len(rover_data['path']),
+            'timestamp': time.time()
+        }
+        try:
+            EMIT_QUEUE.put_nowait(('map_update', payload))
+        except Exception:
+            pass
+
+    except Exception as e:
+        print("❌ _process_map_heavy error:", e)
+
+
+def _process_camera_heavy(msg):
+    try:
+        width = int(msg.get('width', 0))
+        height = int(msg.get('height', 0))
+        encoding = msg.get('encoding', 'rgb8')
+        image_data = msg.get('data')
+        if not image_data:
+            return
+
+        if encoding in ('jpeg', 'jpg'):
+            base64_data = image_data if isinstance(image_data, str) else base64.b64encode(bytes(image_data)).decode('utf-8')
+        else:
+            if isinstance(image_data, str):
+                try:
+                    image_bytes = base64.b64decode(image_data)
+                except Exception:
+                    image_bytes = image_data.encode()
+            elif isinstance(image_data, list):
+                image_bytes = bytes(image_data)
+            else:
+                image_bytes = image_data
+
+            try:
+                np_arr = np.frombuffer(image_bytes, np.uint8)
+                if encoding == 'rgb8' and width > 0 and height > 0 and np_arr.size == width * height * 3:
+                    img = np_arr.reshape((height, width, 3))
+                    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                else:
+                    img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                    if img_bgr is None:
+                        return
+                max_dim = 800
+                if max(img_bgr.shape[:2]) > max_dim:
+                    scale = max_dim / max(img_bgr.shape[:2])
+                    new_w = int(img_bgr.shape[1] * scale)
+                    new_h = int(img_bgr.shape[0] * scale)
+                    img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                # Lower camera JPEG quality to reduce encoding time and bandwidth
+                _, jpg_data = cv2.imencode('.jpg', img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 50])
+                base64_data = base64.b64encode(jpg_data.tobytes()).decode('utf-8')
+            except Exception as e:
+                print("❌ _process_camera_heavy encode error:", e)
+                return
+
+        rover_data['camera_active'] = True
+        rover_data['frame_count'] += 1
+        rover_data['last_update'] = time.time()
+
+        camera_update = {
+            'width': width,
+            'height': height,
+            'data': base64_data,
+            'frame_count': rover_data['frame_count'],
+            'timestamp': time.time()
+        }
+        try:
+            EMIT_QUEUE.put_nowait(('camera_update', camera_update))
+        except Exception:
+            pass
+
+        print(f"📷 frame {rover_data['frame_count']} queued for emit")
+
+    except Exception as e:
+        print("❌ _process_camera_heavy error:", e)
+
+
+# ---------- lightweight wrappers and other handlers ----------
 def connect_rosbridge_publisher():
-    """ROS publisher connection"""
     global rosbridge_pub_ws, publisher_connected
     try:
         print(f"🔌 Connecting to ROSBridge publisher at {ROSBRIDGE_HOST}:{ROSBRIDGE_PORT}")
@@ -115,33 +325,30 @@ def connect_rosbridge_publisher():
 
 
 def publish_to_ros(topic, msg_type, message):
-    """Publish to ROS"""
     global rosbridge_pub_ws, publisher_connected
     try:
         if not publisher_connected and not connect_rosbridge_publisher():
             print(f"❌ Cannot publish to {topic} - no ROS connection")
             return False
-        
+
         ros_message = {
             "op": "publish",
             "topic": topic,
             "msg": message
         }
-        
+
         rosbridge_pub_ws.send(json.dumps(ros_message, separators=(',', ':')))
         print(f"📤 Published to {topic}: {message}")
         log_activity(f"📤 Sent to ROS: {topic}")
         return True
-        
+
     except Exception as e:
         print(f"❌ ROS publish error: {e}")
         publisher_connected = False
         return False
 
 
-# UNITY RESTART DETECTION & RECOVERY FUNCTIONS
 def cancel_navigation_goal():
-    """Cancel active move_base goal"""
     try:
         cancel_msg = {"id": "", "stamp": {"secs": 0, "nsecs": 0}}
         success = publish_to_ros('/move_base/cancel', 'actionlib_msgs/GoalID', cancel_msg)
@@ -156,7 +363,6 @@ def cancel_navigation_goal():
 
 
 def stop_rover():
-    """Send stop command to rover"""
     try:
         stop_msg = {
             'linear': {'x': 0.0, 'y': 0.0, 'z': 0.0},
@@ -175,14 +381,12 @@ def stop_rover():
 
 
 def clear_costmaps():
-    """Clear move_base costmaps via ROS service"""
     try:
         service_msg = {
             "op": "call_service",
             "service": "/move_base/clear_costmaps",
             "args": {}
         }
-        
         if publisher_connected and rosbridge_pub_ws:
             rosbridge_pub_ws.send(json.dumps(service_msg))
             print("✅ Costmap clear requested")
@@ -195,17 +399,12 @@ def clear_costmaps():
 
 
 def detect_unity_restart(new_x, new_y, new_z):
-    """Detect Unity restart by position jump"""
     try:
         last_x = rover_data['last_position']['x']
         last_y = rover_data['last_position']['y']
-        
-        # Calculate distance
         dx = new_x - last_x
         dy = new_y - last_y
         distance = math.sqrt(dx**2 + dy**2)
-        
-        # Check for large jump (>3 meters)
         if distance > 3.0 and not rover_data['position_jump_detected']:
             print("="*60)
             print(f"🔄 UNITY RESTART DETECTED!")
@@ -213,199 +412,132 @@ def detect_unity_restart(new_x, new_y, new_z):
             print(f"   Old: ({last_x:.1f}, {last_y:.1f})")
             print(f"   New: ({new_x:.1f}, {new_y:.1f})")
             print("="*60)
-            
+
             rover_data['position_jump_detected'] = True
             rover_data['restart_count'] += 1
-            
+
             log_activity(f"🔄 UNITY RESTART #{rover_data['restart_count']} DETECTED!")
             log_activity(f"   Position jump: {distance:.1f}m")
-            
-            # STOP ALL COMMANDS
+
             print("🛑 Stopping rover...")
             stop_rover()
-            
-            # CANCEL ACTIVE GOALS
+
             print("🛑 Cancelling navigation...")
             cancel_navigation_goal()
-            
-            # CLEAR COSTMAPS
+
             print("🧹 Clearing costmaps...")
             clear_costmaps()
-            
-            # Clear path history
+
             rover_data['path'].clear()
-            
-            # Notify dashboard
-            socketio.emit('unity_restart_detected', {
+
+            socketio_payload = {
                 'restart_count': rover_data['restart_count'],
                 'old_position': {'x': last_x, 'y': last_y},
                 'new_position': {'x': new_x, 'y': new_y},
                 'distance_jump': distance,
                 'timestamp': time.time()
-            })
-            
+            }
+            try:
+                EMIT_QUEUE.put_nowait(('unity_restart_detected', socketio_payload))
+            except Exception:
+                pass
+
             print("✅ Unity restart handling complete!")
             log_activity("✅ Reset complete - ready for new commands")
-            
-            # Reset flag after 2 seconds
+
             def reset_flag():
                 time.sleep(2)
                 rover_data['position_jump_detected'] = False
-            
+
             threading.Thread(target=reset_flag, daemon=True).start()
-            
             return True
-        
         return False
-        
+
     except Exception as e:
         print(f"❌ Restart detection error: {e}")
         return False
 
 
-# ROS MESSAGE HANDLERS
+# ---------- ROS message handlers (lightweight) ----------
 def on_message(ws, message):
-    """Process REAL ROS messages ONLY"""
     try:
         data = json.loads(message)
         topic = data.get("topic")
         if not topic:
             return
-            
         msg = data.get("msg", {})
-        print(f"📨 REAL ROS MESSAGE from: {topic}")
-        
-        # EXISTING HANDLERS (KEEP THESE)
+
+        # Lightweight routing: enqueue heavy tasks
         if topic == "/rover_camera/image_raw":
-            process_camera(msg)
+            try:
+                PROCESSING_QUEUE.put_nowait(('camera', msg))
+            except Exception:
+                pass
         elif topic == "/odom":
             process_odometry(msg)
         elif topic in ["/cmd_vel", "/cmd_vel_direct"]:
             process_velocity(msg)
         elif topic == "/hazard_detection":
             process_detection(msg)
-        
-        # ═══════════════════════════════════════════════════════════
-        # NEW: SLAM MESSAGE HANDLERS (ADDED)
-        # ═══════════════════════════════════════════════════════════
-        elif topic == "/rtabmap/grid_map":  
-            process_map(msg)
-        elif topic == "/semantic_detections":  
-            process_semantic_map(msg)
+        elif topic == "/rtabmap/grid_map":
+            try:
+                PROCESSING_QUEUE.put_nowait(('map', msg))
+            except Exception:
+                pass
+        elif topic == "/semantic_detections":
+            try:
+                PROCESSING_QUEUE.put_nowait(('semantic', msg))
+            except Exception:
+                pass
         elif topic == "/mission_status":
-            process_mission_status(msg)
+            try:
+                PROCESSING_QUEUE.put_nowait(('mission_status', msg))
+            except Exception:
+                pass
         elif topic == "/traversed_path":
-            process_path_history(msg)
-        # ═══════════════════════════════════════════════════════════
-        
+            try:
+                PROCESSING_QUEUE.put_nowait(('path_history', msg))
+            except Exception:
+                pass
+
     except Exception as e:
         print(f"❌ ROS message error: {e}")
 
 
-def process_camera(msg):
-    """Process REAL camera data"""
-    try:
-        width = msg.get('width', 640)
-        height = msg.get('height', 480)
-        encoding = msg.get('encoding', 'rgb8')
-        image_data = msg.get('data')
-        
-        if not image_data:
-            return
-        
-        print(f"📷 REAL camera: {width}x{height}, {encoding}")
-        
-        # Handle ROS image data
-        if isinstance(image_data, str):
-            try:
-                image_bytes = base64.b64decode(image_data)
-            except:
-                image_bytes = image_data.encode()
-        elif isinstance(image_data, list):
-            image_bytes = bytes(image_data)
-        else:
-            image_bytes = image_data
-        
-        # Convert to JPEG
-        if encoding in ['jpeg', 'jpg']:
-            base64_data = base64.b64encode(image_bytes).decode('utf-8')
-        else:
-            try:
-                np_arr = np.frombuffer(image_bytes, np.uint8)
-                if encoding == 'rgb8':
-                    img = np_arr.reshape((height, width, 3))
-                    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                elif encoding == 'bgr8':
-                    img_bgr = np_arr.reshape((height, width, 3))
-                else:
-                    img_bgr = np_arr.reshape((height, width, 3))
-                
-                _, jpg_data = cv2.imencode('.jpg', img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                base64_data = base64.b64encode(jpg_data.tobytes()).decode('utf-8')
-            except Exception as e:
-                print(f"❌ Image conversion error: {e}")
-                return
-        
-        rover_data['camera_active'] = True
-        rover_data['frame_count'] += 1
-        rover_data['last_update'] = time.time()
-        
-        camera_update = {
-            'width': width,
-            'height': height,
-            'data': base64_data,
-            'frame_count': rover_data['frame_count'],
-            'timestamp': time.time()
-        }
-        
-        socketio.emit('camera_update', camera_update)
-        print(f"📷 ✅ REAL frame {rover_data['frame_count']} sent")
-        
-    except Exception as e:
-        print(f"❌ Camera error: {e}")
-
-
 def process_odometry(msg):
-    """Process REAL ROS odometry with Unity restart detection"""
     try:
         print("🗺️ Processing REAL odometry")
-        
-        # Parse nav_msgs/Odometry
         pose_msg = msg.get('pose', {})
         if 'pose' in pose_msg:
             position = pose_msg['pose'].get('position', {})
         else:
             position = pose_msg.get('position', {})
-            
+
         twist_msg = msg.get('twist', {})
         if 'twist' in twist_msg:
             velocity = twist_msg['twist']
         else:
             velocity = twist_msg
-        
-        # Extract REAL values
+
         new_x = float(position.get('x', 0.0))
         new_y = float(position.get('y', 0.0))
         new_z = float(position.get('z', 0.0))
-        
-        # DETECT UNITY RESTART
+
         if rover_data['last_position']['x'] != 0.0 or rover_data['last_position']['y'] != 0.0:
             detect_unity_restart(new_x, new_y, new_z)
-        
-        # Update last position for next check
+
         rover_data['last_position']['x'] = new_x
         rover_data['last_position']['y'] = new_y
         rover_data['last_position']['z'] = new_z
-        
+
         linear_vel = velocity.get('linear', {})
         angular_vel = velocity.get('angular', {})
         linear_x = float(linear_vel.get('x', 0.0))
         angular_z = float(angular_vel.get('z', 0.0))
-        
+
         print(f"🗺️ ✅ REAL position: ({new_x:.3f}, {new_y:.3f})")
         print(f"🗺️ ✅ REAL velocity: L={linear_x:.3f}, A={angular_z:.3f}")
-        
-        # Update with REAL data
+
         rover_data['position']['x'] = new_x
         rover_data['position']['y'] = new_y
         rover_data['position']['z'] = new_z
@@ -413,11 +545,9 @@ def process_odometry(msg):
         rover_data['velocity']['angular_z'] = angular_z
         rover_data['speed'] = abs(linear_x)
         rover_data['last_update'] = time.time()
-        
-        # Add to path
+
         rover_data['path'].append({'x': new_x, 'y': new_y})
-        
-        # Send REAL rover status
+
         rover_status = {
             'position': rover_data['position'].copy(),
             'velocity': rover_data['velocity'].copy(),
@@ -431,368 +561,76 @@ def process_odometry(msg):
             'timestamp': time.time(),
             'data_source': 'REAL_ROS_ODOMETRY'
         }
-        
-        socketio.emit('rover_status', rover_status)
+
+        try:
+            EMIT_QUEUE.put_nowait(('rover_status', rover_status))
+        except Exception:
+            pass
+
         print(f"🗺️ ✅ REAL status sent: ({new_x:.2f}, {new_y:.2f})")
-        
+
     except Exception as e:
         print(f"❌ Odometry error: {e}")
 
 
 def process_velocity(msg):
-    """Process velocity commands"""
     try:
         linear_msg = msg.get('linear', {})
         angular_msg = msg.get('angular', {})
-        
+
         linear = float(linear_msg.get('x', 0.0))
         angular = float(angular_msg.get('z', 0.0))
-        
+
         if abs(linear) > 0.01 or abs(angular) > 0.01:
             rover_data['mode'] = "MOVING"
         else:
             rover_data['mode'] = "IDLE"
-            
+
     except Exception as e:
         print(f"❌ Velocity error: {e}")
 
 
 def process_detection(msg):
-    """Process detection data"""
     try:
         detection_data = json.loads(msg.get('data', '{}'))
         total_obstacles = detection_data.get('total_obstacles', 0)
-        
+
         if total_obstacles > 0:
             log_activity(f"🚨 {total_obstacles} obstacles detected")
-            socketio.emit('detection_update', {
-                'detection': detection_data,
-                'timestamp': time.strftime("%H:%M:%S"),
-                'total_detections': total_obstacles
-            })
-            
+            try:
+                EMIT_QUEUE.put_nowait(('detection_update', {
+                    'detection': detection_data,
+                    'timestamp': time.strftime("%H:%M:%S"),
+                    'total_detections': total_obstacles
+                }))
+            except Exception:
+                pass
+
     except Exception as e:
         print(f"❌ Detection error: {e}")
 
 
-
-def process_map(msg):
-    """
-    Process occupancy grid map with ROVER-SHAPED MARKER + PERSISTENT PATH
-    - Draws 6-wheeled rover icon (rocker-bogie style)
-    - Shows orientation arrow
-    - Persistent yellow path trail (doesn't vanish)
-    - Professional color theme
-    """
-    try:
-        print("🗺️ Processing SLAM map")
-        
-        width = msg.get('info', {}).get('width', 0)
-        height = msg.get('info', {}).get('height', 0)
-        data = msg.get('data', [])
-        
-        if width == 0 or height == 0 or not data:
-            print("⚠️ Invalid map data")
-            return
-        
-        # Get map metadata
-        origin_x = msg.get('info', {}).get('origin', {}).get('position', {}).get('x', -60.0)
-        origin_y = msg.get('info', {}).get('origin', {}).get('position', {}).get('y', -60.0)
-        resolution = msg.get('info', {}).get('resolution', 0.1)
-        
-        print(f"🗺️ Map: {width}x{height}, Origin: ({origin_x:.1f}, {origin_y:.1f}), Res: {resolution}m")
-        
-        # Convert occupancy grid to numpy array
-        map_array = np.array(data, dtype=np.int8).reshape((height, width))
-        
-        # ═══════════════════════════════════════════════════════════
-        # COLOR SCHEME (BGR format for OpenCV)
-        # ═══════════════════════════════════════════════════════════
-        img = np.zeros((height, width, 3), dtype=np.uint8)
-        
-        img[map_array == -1] = [180, 180, 180]  # Unknown = medium gray
-        img[map_array == 0] = [255, 255, 255]   # Free space = WHITE
-        img[map_array == 25] = [255, 0, 255]    # Flags = MAGENTA
-        img[map_array == 50] = [0, 255, 0]      # Base = GREEN
-        img[map_array == 75] = [0, 165, 255]    # Rocks = ORANGE
-        img[map_array == 100] = [0, 0, 0]       # Obstacles = BLACK
-        
-        print("🎨 Applied professional color theme")
-        
-        
-        # ═══════════════════════════════════════════════════════════
-        # DRAW PERSISTENT PATH TRAIL (Yellow, doesn't vanish)
-        # ═══════════════════════════════════════════════════════════
-        try:
-            path = list(rover_data['path'])
-            if len(path) > 1:
-                # Draw ALL path points (not just recent ones)
-                for i in range(len(path) - 1):
-                    x1, y1 = path[i]['x'], path[i]['y']
-                    x2, y2 = path[i + 1]['x'], path[i + 1]['y']
-                    
-                    # Convert to pixel coordinates
-                    px1 = int((x1 - origin_x) / resolution)
-                    py1 = int((y1 - origin_y) / resolution)
-                    px2 = int((x2 - origin_x) / resolution)
-                    py2 = int((y2 - origin_y) / resolution)
-                    
-                    # Draw line segment (Yellow, 3 pixels thick for visibility)
-                    if (0 <= px1 < width and 0 <= py1 < height and 
-                        0 <= px2 < width and 0 <= py2 < height):
-                        cv2.line(img, (px1, py1), (px2, py2), (0, 255, 255), 3)
-                
-                print(f"🛤️ Drew FULL path: {len(path)} points (persistent)")
-        except Exception as e:
-            print(f"⚠️ Path drawing error: {e}")
-        
-        
-        # ═══════════════════════════════════════════════════════════
-        # DRAW 6-WHEELED ROVER (Rocker-Bogie Style)
-        # ═══════════════════════════════════════════════════════════
-        try:
-            rover_x = rover_data['position']['x']
-            rover_y = rover_data['position']['y']
-            
-            # Convert to pixel coordinates
-            pixel_x = int((rover_x - origin_x) / resolution)
-            pixel_y = int((rover_y - origin_y) / resolution)
-            
-            if 0 <= pixel_x < width and 0 <= pixel_y < height:
-                
-                # Rover dimensions (in pixels, scaled for visibility)
-                rover_length = 25  # ~2.5m in real world
-                rover_width = 18   # ~1.8m
-                wheel_radius = 4   # ~0.4m wheels
-                
-                # ───────────────────────────────────────────────────
-                # DRAW ROVER BODY (White rectangle)
-                # ───────────────────────────────────────────────────
-                body_pts = np.array([
-                    [pixel_x - rover_length//2, pixel_y - rover_width//2],
-                    [pixel_x + rover_length//2, pixel_y - rover_width//2],
-                    [pixel_x + rover_length//2, pixel_y + rover_width//2],
-                    [pixel_x - rover_length//2, pixel_y + rover_width//2],
-                ], np.int32)
-                
-                # Fill body (white)
-                cv2.fillPoly(img, [body_pts], (255, 255, 255))
-                # Black outline
-                cv2.polylines(img, [body_pts], True, (0, 0, 0), 2)
-                
-                # ───────────────────────────────────────────────────
-                # DRAW 6 WHEELS (Black circles) - Rocker-Bogie Layout
-                # ───────────────────────────────────────────────────
-                # Left side wheels (3 wheels)
-                left_y = pixel_y - rover_width//2 - wheel_radius
-                cv2.circle(img, (pixel_x - rover_length//3, left_y), wheel_radius, (0, 0, 0), -1)  # Front-left
-                cv2.circle(img, (pixel_x, left_y), wheel_radius, (0, 0, 0), -1)  # Mid-left
-                cv2.circle(img, (pixel_x + rover_length//3, left_y), wheel_radius, (0, 0, 0), -1)  # Back-left
-                
-                # Right side wheels (3 wheels)
-                right_y = pixel_y + rover_width//2 + wheel_radius
-                cv2.circle(img, (pixel_x - rover_length//3, right_y), wheel_radius, (0, 0, 0), -1)  # Front-right
-                cv2.circle(img, (pixel_x, right_y), wheel_radius, (0, 0, 0), -1)  # Mid-right
-                cv2.circle(img, (pixel_x + rover_length//3, right_y), wheel_radius, (0, 0, 0), -1)  # Back-right
-                
-                # ───────────────────────────────────────────────────
-                # DRAW DIRECTION ARROW (Red)
-                # ───────────────────────────────────────────────────
-                # Calculate arrow endpoint (front of rover)
-                arrow_length = rover_length // 2 + 10
-                arrow_end_x = pixel_x + arrow_length
-                arrow_end_y = pixel_y
-                
-                # Draw arrow (red, thick line)
-                cv2.arrowedLine(img, (pixel_x, pixel_y), (arrow_end_x, arrow_end_y), 
-                               (0, 0, 255), 3, tipLength=0.3)
-                
-                # ───────────────────────────────────────────────────
-                # DRAW CENTER DOT (Cyan - exact position)
-                # ───────────────────────────────────────────────────
-                cv2.circle(img, (pixel_x, pixel_y), 3, (255, 255, 0), -1)
-                
-                print(f"🤖 6-wheeled rover drawn at pixel: ({pixel_x}, {pixel_y})")
-            else:
-                print(f"⚠️ Rover out of map bounds: ({pixel_x}, {pixel_y})")
-                
-        except Exception as e:
-            print(f"⚠️ Rover marker error: {e}")
-        
-        
-        # Flip vertically for correct orientation
-        img = cv2.flip(img, 0)
-        
-        # Encode as base64 JPEG with high quality
-        _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        map_base64 = base64.b64encode(buffer).decode('utf-8')
-        
-        slam_data['map_image'] = map_base64
-        
-        # Emit to dashboard
-        socketio.emit('map_update', {
-            'map': map_base64,
-            'width': width,
-            'height': height,
-            'rover_position': {
-                'x': rover_data['position']['x'],
-                'y': rover_data['position']['y']
-            },
-            'path_length': len(rover_data['path']),
-            'timestamp': time.time()
-        })
-        
-        print(f"🗺️ ✅ Map sent: {width}x{height} with 6-wheeled rover + full path")
-        
-    except Exception as e:
-        print(f"❌ Map processing error: {e}")
-        import traceback
-        traceback.print_exc()
-
-# def process_map(msg):
-#     """
-#     Process RTAB-Map occupancy grid with elegant colors (FIXED VERSION)
-#     """
-#     try:
-#         print("🗺️ Processing SLAM map from /rtabmap/grid_map")
-        
-#         width = msg.get('info', {}).get('width', 0)
-#         height = msg.get('info', {}).get('height', 0)
-#         data = msg.get('data', [])
-        
-#         if width == 0 or height == 0 or not data:
-#             print("⚠️ Invalid map data")
-#             return
-        
-#         # Get map metadata
-#         origin_x = msg.get('info', {}).get('origin', {}).get('position', {}).get('x', -60.0)
-#         origin_y = msg.get('info', {}).get('origin', {}).get('position', {}).get('y', -60.0)
-#         resolution = msg.get('info', {}).get('resolution', 0.1)
-        
-#         print(f"🗺️ Map: {width}x{height}, Origin: ({origin_x:.1f}, {origin_y:.1f}), Res: {resolution}m")
-        
-#         # Convert occupancy grid to numpy array
-#         map_array = np.array(data, dtype=np.int8).reshape((height, width))
-        
-#         # Create RGB image with elegant color scheme (BGR format for OpenCV)
-#         img = np.zeros((height, width, 3), dtype=np.uint8)
-        
-#         # ELEGANT SPACE-THEMED COLOR PALETTE:
-#         # Unknown areas (never scanned) - Deep midnight blue
-#         img[map_array == -1] = [90, 70, 50]      # BGR: Dark blue-purple (#32465A)
-        
-#         # Free space (explored, safe) - Moonlit silver-blue  
-#         img[map_array == 0] = [220, 210, 180]    # BGR: Pale moon silver (#B4D2DC)
-        
-#         # Semantic labels (if your system uses them)
-#         img[map_array == 25] = [180, 130, 255]   # Flags: Soft pink (#FF82B4)
-#         img[map_array == 50] = [140, 200, 100]   # Base: Mint green (#64C88C)
-#         img[map_array == 75] = [100, 160, 255]   # Rocks: Peach (#FFA064)
-        
-#         # Occupied space (obstacles, walls) - Deep space indigo
-#         img[map_array >= 90] = [60, 40, 30]      # BGR: Dark indigo (#1E283C)
-        
-#         print("🎨 Applied elegant color scheme")
-        
-#         # Draw path trail (elegant cyan)
-#         try:
-#             path = list(rover_data['path'])
-#             if len(path) > 1:
-#                 for i in range(len(path) - 1):
-#                     x1, y1 = path[i]['x'], path[i]['y']
-#                     x2, y2 = path[i + 1]['x'], path[i + 1]['y']
-                    
-#                     px1 = int((x1 - origin_x) / resolution)
-#                     py1 = int((y1 - origin_y) / resolution)
-#                     px2 = int((x2 - origin_x) / resolution)
-#                     py2 = int((y2 - origin_y) / resolution)
-                    
-#                     # Check bounds
-#                     if (0 <= px1 < width and 0 <= py1 < height and 
-#                         0 <= px2 < width and 0 <= py2 < height):
-#                         cv2.line(img, (px1, py1), (px2, py2), (255, 200, 100), 3)  # Elegant gold path
-                
-#                 print(f"🛤️ Drew path: {len(path)} points")
-#         except Exception as e:
-#             print(f"⚠️ Path drawing error: {e}")
-        
-#         # Draw rover marker (bright gold circle)
-#         try:
-#             rover_x = rover_data['position']['x']
-#             rover_y = rover_data['position']['y']
-            
-#             pixel_x = int((rover_x - origin_x) / resolution)
-#             pixel_y = int((rover_y - origin_y) / resolution)
-            
-#             if 0 <= pixel_x < width and 0 <= pixel_y < height:
-#                 # Rover body (bright white circle with gold outline)
-#                 cv2.circle(img, (pixel_x, pixel_y), 15, (255, 255, 255), -1)  # White fill
-#                 cv2.circle(img, (pixel_x, pixel_y), 15, (80, 180, 255), 3)    # Gold outline
-                
-#                 # Center dot
-#                 cv2.circle(img, (pixel_x, pixel_y), 4, (0, 0, 255), -1)  # Red center
-                
-#                 print(f"🤖 Rover drawn at ({pixel_x}, {pixel_y})")
-#         except Exception as e:
-#             print(f"⚠️ Rover marker error: {e}")
-        
-#         # Flip vertically (ROS coordinate system)
-#         img = cv2.flip(img, 0)
-        
-#         # Encode as JPEG
-#         _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-#         map_base64 = base64.b64encode(buffer).decode('utf-8')
-        
-#         slam_data['map_image'] = map_base64
-        
-#         # Emit to dashboard
-#         socketio.emit('map_update', {
-#             'map': map_base64,
-#             'width': width,
-#             'height': height,
-#             'rover_position': {
-#                 'x': rover_data['position']['x'],
-#                 'y': rover_data['position']['y']
-#             },
-#             'path_length': len(rover_data['path']),
-#             'timestamp': time.time()
-#         })
-        
-#         print(f"🗺️ ✅ Elegant map sent: {width}x{height}")
-        
-#     except Exception as e:
-#         print(f"❌ Map processing error: {e}")
-#         import traceback
-#         traceback.print_exc()
-
-
 def process_semantic_map(msg):
-    """Process semantic map (detected objects from YOLO)"""
     try:
         print("🪨 Processing semantic map")
-        
-        # Parse JSON data
         if isinstance(msg, dict) and 'data' in msg:
             semantic_json = msg['data']
         else:
             semantic_json = msg
-        
+
         if isinstance(semantic_json, str):
             semantic_dict = json.loads(semantic_json)
         else:
             semantic_dict = semantic_json
-        
-        # Update slam_data
+
         slam_data['semantic_map'] = semantic_dict
-        
-        # Count detections
+
         rocks_count = len(semantic_dict.get('rocks', []))
         base_count = len(semantic_dict.get('base', []))
         flags_count = len(semantic_dict.get('flags', []))
         antennas_count = len(semantic_dict.get('antennas', []))
-        
-        # Emit to dashboard
-        socketio.emit('semantic_update', {
+
+        payload = {
             'semantic_map': semantic_dict,
             'counts': {
                 'rocks': rocks_count,
@@ -801,66 +639,62 @@ def process_semantic_map(msg):
                 'antennas': antennas_count
             },
             'timestamp': time.time()
-        })
-        
+        }
+        try:
+            EMIT_QUEUE.put_nowait(('semantic_update', payload))
+        except Exception:
+            pass
+
         print(f"🪨 ✅ Semantic: {rocks_count} rocks, {base_count} base, {flags_count} flags")
-        
+
         if rocks_count > 0 or base_count > 0:
             log_activity(f"🔍 Detected: {rocks_count} rocks, {base_count} base")
-        
+
     except Exception as e:
         print(f"❌ Semantic map error: {e}")
 
 
 def process_mission_status(msg):
-    """Process mission status (battery, mode, etc.)"""
     try:
         print("🎯 Processing mission status")
-        
-        # Parse JSON data
         if isinstance(msg, dict) and 'data' in msg:
             status_json = msg['data']
         else:
             status_json = msg
-        
+
         if isinstance(status_json, str):
             status_dict = json.loads(status_json)
         else:
             status_dict = status_json
-        
-        # Update slam_data
+
         slam_data['mission_status'] = status_dict
-        
+
         battery = status_dict.get('battery', 100.0)
         mode = status_dict.get('mode', 'EXPLORATION')
         distance_to_base = status_dict.get('distance_to_base', 0.0)
-        
-        # Emit to dashboard
-        socketio.emit('mission_update', {
-            'mission_status': status_dict,
-            'timestamp': time.time()
-        })
-        
+
+        payload = {'mission_status': status_dict, 'timestamp': time.time()}
+        try:
+            EMIT_QUEUE.put_nowait(('mission_update', payload))
+        except Exception:
+            pass
+
         print(f"🎯 ✅ Mission: Battery {battery:.0f}%, Mode: {mode}, Dist to base: {distance_to_base:.1f}m")
-        
-        # Log important events
+
         if battery < 15 and mode == "EMERGENCY_RETURN":
             log_activity(f"🔋 EMERGENCY! Battery {battery:.0f}% - Returning to base")
         elif mode == "BACKTRACKING":
             log_activity(f"🔙 Backtracking to base")
-        
+
     except Exception as e:
         print(f"❌ Mission status error: {e}")
 
 
 def process_path_history(msg):
-    """Process traversed path for visualization"""
     try:
         print("🛤️ Processing path history")
-        
         poses = msg.get('poses', [])
-        
-        # Extract path points
+
         path_points = []
         for pose_stamped in poses:
             pose = pose_stamped.get('pose', {})
@@ -868,51 +702,45 @@ def process_path_history(msg):
             x = position.get('x', 0.0)
             y = position.get('y', 0.0)
             path_points.append({'x': x, 'y': y})
-        
+
         slam_data['path_history'] = path_points
-        
-        # Emit to dashboard
-        socketio.emit('path_update', {
-            'path': path_points[-50:],  # Last 50 points
+
+        payload = {
+            'path': path_points[-50:],
             'total_points': len(path_points),
             'timestamp': time.time()
-        })
-        
+        }
+        try:
+            EMIT_QUEUE.put_nowait(('path_update', payload))
+        except Exception:
+            pass
+
         print(f"🛤️ ✅ Path: {len(path_points)} waypoints")
-        
+
     except Exception as e:
         print(f"❌ Path history error: {e}")
 
-# ═══════════════════════════════════════════════════════════════════
 
-
-# ROS Connection handlers
+# ---------- ROS connection & subscribe ----------
 def on_open(ws):
-    """ROS connection opened"""
     global rosbridge_ws
     rosbridge_ws = ws
     print("🌐 ✅ ROS connected - REAL DATA ONLY")
     log_activity("🌐 ROS connected with restart detection")
     rover_data['connected'] = True
-    
-    # EXISTING TOPICS (KEEP THESE)
+
     topics = [
         {"topic": "/rover_camera/image_raw", "type": "sensor_msgs/Image"},
         {"topic": "/odom", "type": "nav_msgs/Odometry"},
         {"topic": "/cmd_vel", "type": "geometry_msgs/Twist"},
         {"topic": "/cmd_vel_direct", "type": "geometry_msgs/Twist"},
         {"topic": "/hazard_detection", "type": "std_msgs/String"},
-        
-        # ═══════════════════════════════════════════════════════════
-        # NEW: SLAM TOPICS (ADDED)
-        # ═══════════════════════════════════════════════════════════
-        {"topic": "/rtabmap/grid_map", "type": "nav_msgs/OccupancyGrid"},  
-        {"topic": "/semantic_detections", "type": "std_msgs/String"},      
+        {"topic": "/rtabmap/grid_map", "type": "nav_msgs/OccupancyGrid"},
+        {"topic": "/semantic_detections", "type": "std_msgs/String"},
         {"topic": "/mission_status", "type": "std_msgs/String"},
         {"topic": "/traversed_path", "type": "nav_msgs/Path"},
-        # ═══════════════════════════════════════════════════════════
     ]
-    
+
     for topic_info in topics:
         subscription = {
             "op": "subscribe",
@@ -939,7 +767,6 @@ def on_close(ws, close_status_code, close_msg):
 
 
 def rosbridge_client():
-    """ROS client - NO FAKE DATA"""
     global rosbridge_ws
     while True:
         try:
@@ -957,18 +784,17 @@ def rosbridge_client():
         except Exception as e:
             print(f"❌ ROS client error: {e}")
             rover_data['connected'] = False
-        
+
         print("⏳ Reconnecting in 5 seconds...")
         time.sleep(5)
 
 
-# Socket handlers
+# ---------- Socket handlers ----------
 @socketio.on('connect')
 def handle_connect():
-    """Client connected"""
     print("🌐 ✅ Dashboard connected - AUTO RESTART DETECTION")
     log_activity("🌐 Dashboard connected with restart detection")
-    
+
     emit('initial_state', {
         'rover_data': {
             'position': rover_data['position'],
@@ -984,17 +810,12 @@ def handle_connect():
             'restart_detection_enabled': True
         },
         'activity_log': list(activity_log)[-10:],
-        
-        # ═══════════════════════════════════════════════════════════
-        # NEW: SLAM DATA (ADDED)
-        # ═══════════════════════════════════════════════════════════
         'slam_data': {
             'map_available': slam_data['map_image'] is not None,
             'semantic_map': slam_data['semantic_map'],
             'mission_status': slam_data['mission_status'],
             'path_length': len(slam_data['path_history'])
         }
-        # ═══════════════════════════════════════════════════════════
     })
 
 
@@ -1005,19 +826,18 @@ def handle_disconnect():
 
 @socketio.on('rover_command')
 def handle_rover_command(data):
-    """Handle rover commands"""
     try:
         cmd_vel = data.get('cmd_vel', {})
         linear_x = float(cmd_vel.get('linear', {}).get('x', 0.0))
         angular_z = float(cmd_vel.get('angular', {}).get('z', 0.0))
-        
+
         twist_msg = {
             'linear': {'x': linear_x, 'y': 0.0, 'z': 0.0},
             'angular': {'x': 0.0, 'y': 0.0, 'z': angular_z}
         }
-        
+
         success = publish_to_ros('/cmd_vel', 'geometry_msgs/Twist', twist_msg)
-        
+
         if success:
             rover_data['velocity']['linear_x'] = linear_x
             rover_data['velocity']['angular_z'] = angular_z
@@ -1026,21 +846,20 @@ def handle_rover_command(data):
             emit('command_success', {'message': 'Command sent'})
         else:
             emit('command_error', {'error': 'Failed to send'})
-            
+
     except Exception as e:
         emit('command_error', {'error': f'Error: {e}'})
 
 
 @socketio.on('navigation_goal')
 def handle_navigation_goal(data):
-    """Handle navigation goals"""
     try:
         goal = data.get('goal', {})
         position = goal.get('position', {})
-        
+
         x = float(position.get('x', 0.0))
         y = float(position.get('y', 0.0))
-        
+
         goal_msg = {
             'header': {
                 'frame_id': 'map',
@@ -1051,42 +870,41 @@ def handle_navigation_goal(data):
                 'orientation': {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0}
             }
         }
-        
+
         success = publish_to_ros('/move_base_simple/goal', 'geometry_msgs/PoseStamped', goal_msg)
-        
+
         if success:
             rover_data['mode'] = f"NAV ({x:.1f},{y:.1f})"
             log_activity(f"🎯 Goal: ({x:.1f},{y:.1f})")
             emit('goal_success', {'message': f'Goal: ({x:.1f},{y:.1f})'})
         else:
             emit('goal_error', {'error': 'Navigation failed'})
-            
+
     except Exception as e:
         emit('goal_error', {'error': f'Error: {e}'})
 
 
 @socketio.on('reset_navigation')
 def handle_reset_navigation():
-    """Manually reset navigation"""
     try:
         print("🔄 Manual reset requested")
         log_activity("🔄 Manual navigation reset")
-        
+
         stop_rover()
         cancel_navigation_goal()
         clear_costmaps()
-        
+
         rover_data['path'].clear()
         rover_data['mode'] = "IDLE"
-        
+
         emit('reset_success', {'message': 'Navigation reset complete'})
         log_activity("✅ Manual reset complete")
-        
+
     except Exception as e:
         emit('reset_error', {'error': f'Reset failed: {e}'})
 
 
-# Flask routes
+# ---------- Flask routes ----------
 @app.route('/')
 def dashboard():
     return render_template('index.html')
@@ -1094,7 +912,6 @@ def dashboard():
 
 @app.route('/api/status')
 def api_status():
-    """API status"""
     return jsonify({
         'status': 'REAL_DATA_WITH_RESTART_DETECTION',
         'rover_data': {
@@ -1119,33 +936,24 @@ def api_status():
 
 @app.route('/api/reset_navigation', methods=['POST'])
 def api_reset_navigation():
-    """API endpoint to reset navigation"""
     try:
         stop_rover()
         cancel_navigation_goal()
         clear_costmaps()
         rover_data['path'].clear()
         rover_data['mode'] = "IDLE"
-        
+
         return jsonify({
             'status': 'success',
             'message': 'Navigation reset complete',
             'timestamp': time.time()
         })
     except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'error': str(e)
-        }), 500
+        return jsonify({'status': 'error', 'error': str(e)}), 500
 
-
-# ═══════════════════════════════════════════════════════════════════
-# NEW: SLAM API ENDPOINTS (ADDED)
-# ═══════════════════════════════════════════════════════════════════
 
 @app.route('/api/slam_status')
 def api_slam_status():
-    """Get SLAM system status"""
     return jsonify({
         'map_available': slam_data['map_image'] is not None,
         'semantic_map': slam_data['semantic_map'],
@@ -1157,23 +965,14 @@ def api_slam_status():
 
 @app.route('/api/map_image')
 def api_map_image():
-    """Get current map image"""
     if slam_data['map_image']:
-        return jsonify({
-            'status': 'success',
-            'map': slam_data['map_image'],
-            'timestamp': time.time()
-        })
+        return jsonify({'status': 'success', 'map': slam_data['map_image'], 'timestamp': time.time()})
     else:
-        return jsonify({
-            'status': 'no_map',
-            'message': 'Map not yet available'
-        }), 404
+        return jsonify({'status': 'no_map', 'message': 'Map not yet available'}), 404
 
 
 @app.route('/api/detected_objects')
 def api_detected_objects():
-    """Get detected objects summary"""
     semantic = slam_data['semantic_map']
     return jsonify({
         'rocks': len(semantic.get('rocks', [])),
@@ -1187,14 +986,11 @@ def api_detected_objects():
 
 @app.route('/api/mission_status')
 def api_mission_status():
-    """Get current mission status"""
     return jsonify(slam_data['mission_status'])
 
-# ═══════════════════════════════════════════════════════════════════
 
-
+# Publisher thread init
 def init_publisher():
-    """Initialize publisher"""
     def publisher_thread():
         global publisher_connected
         while True:
@@ -1202,7 +998,7 @@ def init_publisher():
                 if not connect_rosbridge_publisher():
                     time.sleep(10)
                     continue
-                
+
                 while publisher_connected:
                     time.sleep(30)
                     try:
@@ -1212,14 +1008,14 @@ def init_publisher():
                         else:
                             publisher_connected = False
                             break
-                    except Exception as e:
+                    except Exception:
                         publisher_connected = False
                         break
-                        
-            except Exception as e:
+
+            except Exception:
                 publisher_connected = False
                 time.sleep(10)
-    
+
     thread = threading.Thread(target=publisher_thread, daemon=True)
     thread.start()
 
@@ -1228,10 +1024,11 @@ def init_publisher():
 if __name__ == '__main__':
     print("🚀 UNITY RESTART DETECTION Dashboard - REAL ROS DATA + SLAM")
     log_activity("🚀 Dashboard with AUTO RESTART DETECTION + SLAM starting")
-    
+
+    start_background_workers()
     socketio.start_background_task(target=rosbridge_client)
     init_publisher()
-    
+
     print("="*60)
     print("🤖 AUTO RESTART DETECTION DASHBOARD + SLAM!")
     print("="*60)
@@ -1252,12 +1049,12 @@ if __name__ == '__main__':
     print("="*60)
     print(f"✅ 100% REAL ROS DATA")
     print("="*60)
-    
+
     try:
-        socketio.run(app, 
-                    host='172.22.54.111', 
-                    port=5000, 
-                    debug=False,
-                    use_reloader=False)
+        socketio.run(app,
+                     host='172.22.54.111',
+                     port=5000,
+                     debug=False,
+                     use_reloader=False)
     except KeyboardInterrupt:
         print("\n🛑 Dashboard stopped")
