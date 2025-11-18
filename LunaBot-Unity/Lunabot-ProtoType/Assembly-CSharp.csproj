@@ -63,24 +63,16 @@
     <Analyzer Include="C:\Program Files\Unity\Hub\Editor\2022.3.62f1\Editor\Data\Tools\Unity.SourceGenerators\Unity.Properties.SourceGenerator.dll" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Assets\Scripts\RoverController.cs" />
     <Compile Include="Assets\Scripts\LidarSensor.cs" />
     <Compile Include="Assets\Scripts\RoverCameraPublisher.cs" />
     <Compile Include="Assets\Scripts\DepthCameraPublisher.cs" />
-    <Compile Include="Assets\Scripts\HazardPublisher.cs" />
-    <Compile Include="Assets\Scripts\RoverHazardDetector.cs" />
     <Compile Include="Assets\Scripts\UnityMainThreadDispatcher.cs" />
-    <Compile Include="Assets\Scripts\RoverCameraLight.cs" />
     <Compile Include="Assets\Stagit\SkyboxEarthPlanets\script\skyboxspace_mouselook_v1.cs" />
     <Compile Include="Assets\Scripts\FPSDisplay.cs" />
     <Compile Include="Assets\Scripts\LiveCameraPublisher.cs" />
     <Compile Include="Assets\Stagit\SkyboxEarthPlanets\script\skyboxspace_demo_v1.cs" />
-    <Compile Include="Assets\Scripts\NewBehaviourScript.cs" />
     <Compile Include="Assets\Scripts\RosBridgeClient.cs" />
-    <Compile Include="Assets\Scripts\UIDashboard.cs" />
     <Compile Include="Assets\Scripts\ROSControlledRover.cs" />
-    <Compile Include="Assets\Scripts\PatrolController.cs" />
-    <Compile Include="Assets\Scripts\RoverAutonomousController.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Assets\Stagit\SkyboxEarthPlanets\readme.txt" />

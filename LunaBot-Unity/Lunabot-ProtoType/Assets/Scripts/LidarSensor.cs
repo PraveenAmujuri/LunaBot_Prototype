@@ -6,12 +6,12 @@ using System;
 public class LidarSensor : MonoBehaviour
 {
     public RosBridgeClient ros;
-    
+
     [Header("LIDAR Configuration")]
-    public int numRays = 180;
-    public float fov = 360.0f;
-    public float maxRange = 20.0f;
-    public float scanRate = 10f;
+    public int numRays = 180;            // Tuning: lower = faster, higher = finer scan
+    public float fov = 360.0f;          // Tuning: set to sensor FOV
+    public float maxRange = 20.0f;      // Tuning: set to actual lidar max range
+    public float scanRate = 10f;        // Tuning: reduce if CPU/bandwidth constrained
 
     [Header("Layer Settings")]
     public LayerMask obstacleMask;
@@ -29,23 +29,13 @@ public class LidarSensor : MonoBehaviour
     {
         if (ros == null)
         {
-            Debug.LogError("❌ LidarSensor: ROS Bridge not assigned!");
+            Debug.LogError("LidarSensor: ROS Bridge not assigned.");
             return;
         }
-        
-        Debug.Log("═══════════════════════════════════════════════");
-        Debug.Log("🔍 LIDAR Sensor Initialized");
-        Debug.Log($"   Rays: {numRays} | FOV: {fov}° | Range: {maxRange}m");
-        Debug.Log($"   Position: {transform.position}");
-        Debug.Log($"   Forward: {transform.forward}");
-        Debug.Log($"   Rotation: {transform.rotation.eulerAngles}");
-        Debug.Log($"   Scanning: {LayerMaskToString(obstacleMask)}");
-        Debug.Log("═══════════════════════════════════════════════");
-        
+
         StartCoroutine(PublishLaserScan());
     }
 
-    // FIXED: Add ROS time helper
     private double GetROSTime()
     {
         return (DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds;
@@ -54,7 +44,7 @@ public class LidarSensor : MonoBehaviour
     IEnumerator PublishLaserScan()
     {
         float interval = 1f / scanRate;
-        
+
         while (true)
         {
             yield return new WaitForSeconds(interval);
@@ -67,11 +57,10 @@ public class LidarSensor : MonoBehaviour
             int obstacleCount = 0;
             float minObstacleDist = maxRange;
 
-            // Perform raycasts
             for (int i = 0; i < numRays; i++)
             {
                 float angle = angleMin + i * angleIncrement;
-                
+
                 Vector3 baseForward = transform.parent != null ? transform.parent.forward : transform.forward;
                 Vector3 dir = Quaternion.Euler(0, Mathf.Rad2Deg * angle, 0) * baseForward;
 
@@ -82,41 +71,34 @@ public class LidarSensor : MonoBehaviour
                 {
                     ranges.Add(hit.distance);
                     obstacleCount++;
-                    
+
                     if (hit.distance < minObstacleDist)
                         minObstacleDist = hit.distance;
-                    
+
                     if (showDebugRays && i % 5 == 0)
-                    {
                         Debug.DrawRay(transform.position, dir * hit.distance, hitColor, interval);
-                    }
                 }
                 else
                 {
                     ranges.Add(maxRange);
-                    
+
                     if (showDebugRays && i % 10 == 0)
-                    {
                         Debug.DrawRay(transform.position, dir * maxRange, missColor, interval);
-                    }
                 }
             }
 
             if (obstacleCount > 0)
-            {
-                Debug.Log($"📡 LIDAR: {obstacleCount}/{numRays} rays hit | MIN DISTANCE: {minObstacleDist:F1}m");
-            }
+                Debug.Log($"LIDAR hits: {obstacleCount}/{numRays}  min:{minObstacleDist:F1}m");
 
-            // FIXED: Use ROS time instead of Unity Time.time
             double rosTime = GetROSTime();
             var scanMsg = new
             {
-                header = new 
+                header = new
                 {
-                    stamp = new 
-                    { 
-                        secs = (int)rosTime,                    // FIXED
-                        nsecs = (int)((rosTime % 1) * 1e9)      // FIXED
+                    stamp = new
+                    {
+                        secs = (int)rosTime,
+                        nsecs = (int)((rosTime % 1) * 1e9)
                     },
                     frame_id = frameId
                 },
@@ -125,7 +107,7 @@ public class LidarSensor : MonoBehaviour
                 angle_increment = angleIncrement,
                 time_increment = 0.0f,
                 scan_time = interval,
-                range_min = 0.08f,
+                range_min = 0.08f,        // Tuning: set to sensor minimum reliable range
                 range_max = maxRange,
                 ranges = ranges.ToArray(),
                 intensities = new float[numRays]
@@ -144,9 +126,7 @@ public class LidarSensor : MonoBehaviour
             {
                 string layerName = LayerMask.LayerToName(i);
                 if (!string.IsNullOrEmpty(layerName))
-                {
                     layers += layerName + " ";
-                }
             }
         }
         return string.IsNullOrEmpty(layers) ? "NONE" : layers;
@@ -158,7 +138,7 @@ public class LidarSensor : MonoBehaviour
 
         Gizmos.color = Color.blue;
         Gizmos.DrawWireSphere(transform.position, 0.2f);
-        
+
         Gizmos.color = Color.cyan;
         Vector3 fwd = transform.parent != null ? transform.parent.forward : transform.forward;
         Gizmos.DrawRay(transform.position, fwd * 2f);
