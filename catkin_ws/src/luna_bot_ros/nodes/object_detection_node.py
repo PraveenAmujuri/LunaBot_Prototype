@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-YOLOv8 Lunar Detector - runs YOLO inference and publishes detections to /yolo_detections.
+YOLOv8 Lunar Detector (Local GPU)
+Runs YOLO inference using Ultralytics on local GPU and publishes detections.
 """
 
 import os
@@ -12,53 +13,44 @@ import threading
 from std_msgs.msg import String
 from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge
-from inference_sdk import InferenceHTTPClient
-
+from ultralytics import YOLO
 
 class YoloLunarDetector:
-    """Subscribes to camera topics, runs YOLO inference, publishes detections."""
+    """Subscribes to camera topics, runs local YOLO inference, publishes detections."""
 
     def __init__(self):
-        rospy.loginfo("YOLOv8 Lunar Detector starting")
+        rospy.init_node("yolo_lunar_detector")
+        rospy.loginfo("YOLOv8 Local Lunar Detector starting")
 
-        # Model config
-        cache_dir = os.path.expanduser("~/.luna_bot_models")
-        config_path = os.path.join(cache_dir, "model_config.json")
-
-        if not os.path.exists(config_path):
-            rospy.logerr("Model config not found; run LunaBotModelSetup")
+        # Load local model (best.pt)
+        model_path = os.path.join(os.path.dirname(__file__), "best.pt")
+        
+        if not os.path.exists(model_path):
+            rospy.logerr(f"Model not found at {model_path}. Please place your custom .pt file there.")
+            self.yolo_available = False
+            return
+            
+        try:
+            # Load model onto GPU (if available) automatically
+            self.model = YOLO(model_path)
+            rospy.loginfo(f"Custom Model loaded: {model_path}")
+        except Exception as e:
+            rospy.logerr(f"Failed to load YOLO model: {e}")
             self.yolo_available = False
             return
 
-        with open(config_path, "r") as f:
-            config = json.load(f)
-
-        self.model_id = config.get("model_id")
-        self.api_key = config.get("api_key")
-
-        if not self.model_id or not self.api_key:
-            rospy.logerr("Model ID or API key missing in config")
-            self.yolo_available = False
-            return
-
-        # Inference client
-        self.yolo_client = InferenceHTTPClient(
-            api_url="https://detect.roboflow.com",
-            api_key=self.api_key
-        )
-
-        # Class sets (used to tag detections)
-        self.safe_classes = {"clear path", "austroads", "flag", "antenna"}
-        self.obstacle_classes = {"rocks", "objects", "space capsule"}
+        # Define class categories
+        self.safe_classes = {"clear path", "flag", "antenna"}
+        self.obstacle_classes = {"rocks", "buildings", "space capsule"}
         self.caution_classes = {"shadows"}
 
         self.bridge = CvBridge()
         self.yolo_available = True
 
-        # Publisher
+        # Publishers
         self.detection_pub = rospy.Publisher("/yolo_detections", String, queue_size=10)
 
-        # Camera topics
+        # Subscribers
         image_topics = [
             "/camera/image_raw",
             "/usb_cam/image_raw",
@@ -77,7 +69,6 @@ class YoloLunarDetector:
         for topic in compressed_topics:
             rospy.Subscriber(topic, CompressedImage, self.compressed_callback)
 
-        # Buffer & thread
         self.current_image = None
         self.image_lock = threading.Lock()
 
@@ -88,11 +79,7 @@ class YoloLunarDetector:
         rospy.loginfo("YOLOv8 Lunar Detector ready")
         rospy.loginfo(f"Safe classes: {sorted(self.safe_classes)}")
         rospy.loginfo(f"Obstacle classes: {sorted(self.obstacle_classes)}")
-        rospy.loginfo(f"Caution classes: {sorted(self.caution_classes)}")
 
-    # --------------------
-    # Image handlers
-    # --------------------
     def image_callback(self, msg):
         """Handle uncompressed Image messages."""
         try:
@@ -122,12 +109,9 @@ class YoloLunarDetector:
         except Exception as e:
             rospy.logwarn_throttle(5, f"Compressed image callback error: {e}")
 
-    # --------------------
-    # Detection loop
-    # --------------------
     def detection_loop(self):
         """Run inference at a steady rate and publish detections."""
-        rate = rospy.Rate(2)  # Tuning note: increase for faster detection (higher CPU/network usage)
+        rate = rospy.Rate(10)
         while not rospy.is_shutdown():
             with self.image_lock:
                 img = self.current_image.copy() if self.current_image is not None else None
@@ -145,47 +129,48 @@ class YoloLunarDetector:
             rate.sleep()
 
     def detect_objects(self, img):
-        """Run inference using configured remote client and format results."""
+        """Run inference using Local Ultralytics Model."""
         try:
-            tmp_path = "/tmp/temp_roboflow_infer.jpg"  # Local temp file for inference
-            cv2.imwrite(tmp_path, img)
-            result = self.yolo_client.infer(tmp_path, model_id=self.model_id)
-            os.remove(tmp_path)
+            # Run inference on GPU
+            results = self.model.predict(source=img, conf=0.25, verbose=False, device='0')
 
             detections = []
 
-            if "predictions" in result:
-                for pred in result["predictions"]:
-                    cls = pred.get("class", "unknown").lower()
-                    conf = float(pred.get("confidence", 0.0))
-                    x = int(pred.get("x", 0))
-                    y = int(pred.get("y", 0))
-                    w = int(pred.get("width", 0))
-                    h = int(pred.get("height", 0))
+            for r in results:
+                boxes = r.boxes
+                for box in boxes:
+                    x_c, y_c, w, h = box.xywh[0]
+                    
+                    cls_id = int(box.cls[0])
+                    raw_cls = self.model.names[cls_id]
+                    cls_lower = raw_cls.lower()
+                    
+                    conf = float(box.conf[0])
+
+                    is_obs = cls_lower in self.obstacle_classes
+                    is_safe = cls_lower in self.safe_classes
+                    is_caution = cls_lower in self.caution_classes
 
                     detection = {
-                        "class": cls,
-                        "confidence": conf,
-                        "x": x,
-                        "y": y,
-                        "width": w,
-                        "height": h,
-                        "is_obstacle": cls in self.obstacle_classes,
-                        "is_safe": cls in self.safe_classes,
-                        "is_caution": cls in self.caution_classes
+                        "class": cls_lower,
+                        "confidence": round(conf, 2),
+                        "x": int(x_c),
+                        "y": int(y_c),
+                        "width": int(w),
+                        "height": int(h),
+                        "is_obstacle": is_obs,
+                        "is_safe": is_safe,
+                        "is_caution": is_caution
                     }
                     detections.append(detection)
 
-                # Log summary
-                obstacles = [d["class"] for d in detections if d["is_obstacle"]]
-                safe_zones = [d["class"] for d in detections if d["is_safe"]]
+            obstacles = [d["class"] for d in detections if d["is_obstacle"]]
+            others = [d["class"] for d in detections if not d["is_obstacle"] and not d["is_safe"]]
 
-                if obstacles:
-                    rospy.loginfo_throttle(3, f"Obstacles: {obstacles}")
-                elif safe_zones:
-                    rospy.loginfo_throttle(5, f"Safe areas: {safe_zones}")
-                else:
-                    rospy.loginfo_throttle(5, f"Detections: {[d['class'] for d in detections]}")
+            if obstacles:
+                rospy.loginfo_throttle(3, f"Obstacles: {obstacles}")
+            elif others:
+                rospy.loginfo_throttle(3, f"Ignored Objects: {others}")
 
             return detections
 
@@ -193,9 +178,7 @@ class YoloLunarDetector:
             rospy.logerr(f"Detection error: {e}")
             return None
 
-
 def main():
-    rospy.init_node("yolo_lunar_detector")
     detector = YoloLunarDetector()
     if detector.yolo_available:
         rospy.spin()
