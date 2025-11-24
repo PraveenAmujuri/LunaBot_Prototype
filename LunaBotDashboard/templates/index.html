@@ -13,13 +13,17 @@
     <div id="toast-container"></div>
 
     <section class="hero">
+<div class="hero-bg-blobs">
+  <div class="hero-blob1"></div>
+  <div class="hero-blob2"></div>
+  <div class="hero-blob3"></div>
+</div>
         <div id="particles-js"></div>
         <div class="hero-content">
             <div class="hero-left">
                 <h1 class="hero-title">LunaBot Autonomous Navigation</h1>
                 <p class="hero-subtitle">SLAM-Based Rover Control System</p>
                 <p class="hero-description">Advanced autonomous navigation with real-time SLAM mapping, computer vision detection, and intelligent path planning. Experience cutting-edge robotics technology designed for lunar exploration and beyond.</p>
-                <a href="#dashboard" class="launch-button">Launch Controls</a>
             </div>
             <div class="hero-right">
                 <div class="rover-container">
@@ -27,7 +31,23 @@
                 </div>
             </div>
         </div>
+<button class="launch-button group btn-hero" onclick="document.getElementById('dashboard').scrollIntoView({ behavior: 'smooth' });" aria-label="Launch Controls">
+  <span class="launch-btn-text btn-label">LAUNCH CONTROLS</span>
+
+  <span class="launch-btn-nav btn-reveal" aria-hidden="true">
+    <span>LAUNCH CONTROLS</span>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 12h14"></path>
+      <path d="m12 5 7 7-7 7"></path>
+    </svg>
+  </span>
+
+  <span class="launch-btn-bg btn-dot" aria-hidden="true"></span>
+</button>
+
+
     </section>
+
 
     <header class="sticky-header">
         <h2>Control Dashboard</h2>
@@ -35,6 +55,21 @@
             <span>Status:</span>
             <div id="connection-indicator" class="disconnected"></div>
             <span id="connection-text-header" class="disconnected">Disconnected</span>
+            <span style="margin-left: 15px;">|</span>
+   <span id="latency-indicator" style="margin-left: 15px;">
+  <span id="latency-dot"></span>
+  <span id="latency-text">Latency: -- ms</span>
+</span>
+
+
+                <span style="margin-left: 15px;">|</span>
+                <span style="margin-left: 15px;">
+                    <span id="trafficIcon" style="font-size: 1.1em;">📡</span>
+                    <strong id="networkTraffic" style="color: #00d4ff;">0 KB/s</strong>
+                    <span style="color: var(--text-muted); font-size: 0.9em;">
+                        (<strong id="messageRate" style="color: #00d4ff;">0</strong> msg/s)
+                    </span>
+                </span>
             <span style="margin-left: 15px;">|</span>
             <span style="margin-left: 15px;">🌡️ Temp: <strong id="moon-temp">- °C</strong></span>
         </div>
@@ -86,7 +121,6 @@
                 </div>
             </div>
 
-            <!-- Camera Feed -->
             <div class="card" id="cameraCard">
                 <div class="card-header">
                     <svg class="card-header-icon" viewBox="0 0 24 24"><path d="M4,4H7L9,2H15L17,4H20A2,2 0 0,1 22,6V18A2,2 0 0,1 20,20H4A2,2 0 0,1 2,18V6A2,2 0 0,1 4,4M12,7A5,5 0 0,0 7,12A5,5 0 0,0 12,17A5,5 0 0,0 17,12A5,5 0 0,0 12,7M12,9A3,3 0 0,1 15,12A3,3 0 0,1 12,15A3,3 0 0,1 9,12A3,3 0 0,1 12,9Z" /></svg>
@@ -120,11 +154,12 @@
                         <button id="goal-east" onclick="goEast()">East</button>
                         <button id="goal-south" onclick="goSouth()">South</button>
                     </div>
-                    <div class="custom-goal">
-                        <input type="number" id="goalX" placeholder="X Coordinate" value="10">
-                        <input type="number" id="goalY" placeholder="Y Coordinate" value="0">
-                        <button class="cta-btn" onclick="sendCustomGoal()">Set Custom Goal</button>
-                    </div>
+<div class="custom-goal">
+  <input class="goal-input" type="number" id="goalX" placeholder="X Coordinate" value="10" aria-label="Goal X coordinate">
+  <input class="goal-input" type="number" id="goalY" placeholder="Y Coordinate" value="0" aria-label="Goal Y coordinate">
+  <button class="cta-btn" onclick="sendCustomGoal()"><span class="btn-text">Set Custom Goal</span></button>
+</div>
+
                 </div>
             </div>
 
@@ -151,8 +186,12 @@
                         </div>
                         <div class="status-item">
                             <h4>Battery</h4>
-                            <p id="missionBattery">100%</p>
+                            <div class="battery-container">
+                                <div class="battery-bar" id="batteryBar" style="width: 100%"></div>
+                            </div>
+                            <p id="missionBattery" style="margin-top: 5px;">100%</p>
                         </div>
+
                         <div class="status-item">
                             <h4>To Base</h4>
                             <p id="distanceToBase">0.0m</p>
@@ -162,6 +201,7 @@
                         <p>Position: <span id="positionDisplay">(0, 0, 0)</span></p>
                         <p>Velocity: <span id="velocityDisplay">(0, 0)</span></p>
                         <p>Rover Mode: <span id="modeDisplay">Manual</span></p>
+                        <p>Speed: <span id="speedDisplay">0.0 m/s</span></p>
                         <p>Connection: <span id="connectionDisplay" class="status-ok">OK</span></p>
                     </div>
                 </div>
@@ -203,22 +243,143 @@
                 </div>
             </div>
 
-             <div class="card">
-                <div class="card-header">
-                    <svg class="card-header-icon" viewBox="0 0 24 24"><path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z" /></svg>
-                    <h3>Advanced Panel</h3>
-                </div>
-                 <div class="card-content">
-                       <div class="theme-switcher">
-                            <span>Toggle Theme</span>
-                            <label class="switch">
-                                 <input type="checkbox" id="theme-toggle">
-                                 <span class="slider round"></span>
-                            </label>
-                          </div>
-                          <p class="text-muted" style="margin-top: 15px;">More advanced settings and system overrides will be available here.</p>
-                 </div>
+
+            <div class="card">
+        <div class="card-header">
+            <svg class="card-header-icon" viewBox="0 0 24 24"><path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z" /></svg>
+            <h3>Advanced Panel</h3>
+        </div>
+        <div class="card-content">
+            <div class="theme-switcher">
+                <span>Toggle Theme</span>
+                <label class="switch">
+                    <input type="checkbox" id="theme-toggle">
+                    <span class="slider round"></span>
+                </label>
             </div>
+            
+            <button class="cta-btn" onclick="resetNavigation()" style="width: 100%; margin-top: 20px;">
+                🔄 Reset Navigation
+            </button>
+            <button onclick="downloadDashboardData()" class="cta-btn">Download Dashboard Data</button>
+
+            
+            <p class="text-muted" style="margin-top: 15px;">More advanced settings and system overrides will be available here.</p>
+        </div>
+            </div>
+<div class="card system-metrics-card">
+    <div class="glow-effect glow-blue"></div>
+    <div class="glow-effect glow-gold"></div>
+    
+    <div class="metrics-grid">
+        <div class="metric-item cpu-section">
+            <div class="metric-header">
+                <span class="metric-label">CPU Usage</span>
+                <div class="metric-tags">
+                    <span class="tag-cyan">Peak</span>
+                    <span class="tag-text">Live</span>
+                </div>
+            </div>
+            <div class="metric-main-row">
+                <span class="metric-value-giant" id="cpu-value">0%</span>
+                <div class="sparkline-wrapper">
+<svg class="sparkline-svg" viewBox="0 0 100 50" preserveAspectRatio="none">
+    <defs>
+        <linearGradient id="cpu-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#00d4ff" stop-opacity="0.35"/>
+            <stop offset="100%" stop-color="#00d4ff" stop-opacity="0"/>
+        </linearGradient>
+
+        <!-- Glow Filter -->
+        <filter id="cpu-glow-filter" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur" />
+            <feColorMatrix in="blur" type="matrix"
+                values="0 0 0 0 0
+                        0 0 0 0 0.85
+                        0 0 0 0 1
+                        0 0 0 0.35" />
+        </filter>
+    </defs>
+
+    <!-- Glow under-layer -->
+    <path id="cpu-sparkline-glow"
+          d="M0 50 L100 50"
+          stroke="#00d4ff"
+          stroke-width="10"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-opacity="0.25"
+          fill="none"
+          filter="url(#cpu-glow-filter)" />
+
+    <!-- Fill area -->
+    <path id="cpu-sparkline-fill"
+          d="M0,50 L100,50 Z"
+          fill="url(#cpu-grad)" />
+
+    <!-- Main crisp line -->
+    <path id="cpu-sparkline-path"
+          d="M0,50 L100,50"
+          stroke="#00d4ff"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          fill="none" />
+</svg>
+
+                </div>
+            </div>
+        </div>
+
+        <div class="metric-item gpu-section">
+            <div class="metric-header"><span class="metric-label">GPU Usage</span></div>
+            <div class="radial-layout">
+                <div class="radial-chart">
+                    <svg viewBox="0 0 80 80">
+                        <circle class="radial-bg" cx="40" cy="40" r="36"></circle>
+                        <circle class="radial-fg gpu-stroke" id="gpu-ring" cx="40" cy="40" r="36"></circle>
+                    </svg>
+                    <div class="radial-inner-text" id="gpu-value">0%</div>
+                </div>
+                <div class="metric-info">
+                    <span class="info-big" id="gpu-big-text">0%</span>
+                    <span class="info-small" id="gpu-details">Load</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="metric-item ram-section">
+            <div class="metric-header"><span class="metric-label">RAM Usage</span></div>
+            <div class="radial-layout">
+                <div class="radial-chart">
+                    <svg viewBox="0 0 80 80">
+                        <circle class="radial-bg" cx="40" cy="40" r="36"></circle>
+                        <circle class="radial-fg ram-stroke" id="ram-ring" cx="40" cy="40" r="36"></circle>
+                    </svg>
+                    <div class="radial-inner-text" id="ram-value">0%</div>
+                </div>
+                <div class="metric-info">
+                    <span class="info-big" id="ram-big-text">0%</span>
+                    <span class="info-small" id="ram-details">-- / -- GB</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="metric-item temp-section">
+            <div class="metric-header"><span class="metric-label">GPU Temp</span></div>
+            <div class="temp-header-row">
+                <span class="temp-val-main" id="temp-value">0°C</span>
+                <span class="temp-val-max">Max 85°C</span>
+            </div>
+            <div class="temp-track">
+                <div class="temp-fill" id="temp-bar" style="width: 0%;"></div>
+            </div>
+            <div class="temp-footer">Safe Operating Range</div>
+        </div>
+    </div>
+</div>
+
+
 
         </div>
     </main>
@@ -236,75 +397,75 @@
     document.addEventListener('DOMContentLoaded', () => {
         let model;
 
-        // 3D model setup
         function init3DModel() {
-            const container = document.getElementById('rover-3d-container');
-            if (!container) return;
+    const container = document.getElementById('rover-3d-container');
+    if (!container) return;
 
-            const scene = new THREE.Scene();
-            const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
-            camera.position.set(0, 2, 8);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera.position.set(0, 2, 8);
 
-            const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setSize(container.clientWidth, container.clientHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
-            container.appendChild(renderer.domElement);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setClearColor(0x000000, 0);
+    container.appendChild(renderer.domElement);
 
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
-            scene.add(ambientLight);
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
-            directionalLight.position.set(10, 10, 5);
-            scene.add(directionalLight);
-            const pointLight = new THREE.PointLight(0xffffff, 0.5);
-            pointLight.position.set(-10, -5, -10);
-            scene.add(pointLight);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+    scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    directionalLight.position.set(10, 10, 5);
+    scene.add(directionalLight);
+    const pointLight = new THREE.PointLight(0xffffff, 0.5);
+    pointLight.position.set(-10, -5, -10);
+    scene.add(pointLight);
 
-            const mtlLoader = new THREE.MTLLoader();
-            mtlLoader.setPath('/static/models/');
-            mtlLoader.load('rover.mtl', function(materials) {
-                materials.preload();
-                const objLoader = new THREE.OBJLoader();
-                objLoader.setMaterials(materials);
-                objLoader.setPath('/static/models/');
-                objLoader.load('rover.obj', function(object) {
-                    model = object;
-                    const box = new THREE.Box3().setFromObject(model);
-                    const size = box.getSize(new THREE.Vector3()).length();
-                    const center = box.getCenter(new THREE.Vector3());
-                    model.position.sub(center);
-                    model.scale.multiplyScalar(8.5 / size);
-                    scene.add(model);
-                    console.log('3D Rover loaded');
-                }, undefined, (error) => {
-                    console.error('Error loading .obj', error);
-                    container.innerText = "Error loading 3D model.";
-                });
-            }, undefined, (error) => {
-                console.error('Error loading .mtl', error);
-            });
+    const mtlLoader = new THREE.MTLLoader();
+    mtlLoader.setPath('/static/models/');
+    mtlLoader.load('rover.mtl', function(materials) {
+        materials.preload();
+        const objLoader = new THREE.OBJLoader();
+        objLoader.setMaterials(materials);
+        objLoader.setPath('/static/models/');
+        objLoader.load('rover.obj', function(object) {
+            model = object;
+            const box = new THREE.Box3().setFromObject(model);
+            const size = box.getSize(new THREE.Vector3()).length();
+            const center = box.getCenter(new THREE.Vector3());
+            model.position.sub(center);
+            model.scale.multiplyScalar(8.5 / size);
+            scene.add(model);
+            console.log('3D Rover loaded');
+        }, undefined, (error) => {
+            console.error('Error loading .obj', error);
+            container.innerText = "Error loading 3D model.";
+        });
+    }, undefined, (error) => {
+        console.error('Error loading .mtl', error);
+    });
 
-            const clock = new THREE.Clock();
-            function animate() {
-                requestAnimationFrame(animate);
-                const elapsedTime = clock.getElapsedTime();
-                if (model) {
-                    model.position.y = Math.sin(elapsedTime * 1.5) * 0.05;
-                    model.rotation.y += 0.002;
-                }
-                renderer.render(scene, camera);
-            }
-            animate();
-
-            window.addEventListener('resize', () => {
-                camera.aspect = container.clientWidth / container.clientHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(container.clientWidth, container.clientHeight);
-            });
+    const clock = new THREE.Clock();
+    function animate() {
+        requestAnimationFrame(animate);
+        const elapsedTime = clock.getElapsedTime();
+        if (model) {
+            model.position.y = Math.sin(elapsedTime * 1.5) * 0.05;
+            model.rotation.y += 0.002;
         }
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+}
+
 
         init3DModel();
 
-        // UI listeners
         document.getElementById('expand-controls-btn').addEventListener('click', function() {
             const panel = document.getElementById('advanced-controls-panel');
             panel.classList.toggle('expanded');
@@ -325,7 +486,6 @@
             if (!this.checked) document.body.removeAttribute('data-theme');
         });
 
-        // animations & particles
         gsap.registerPlugin(ScrollTrigger);
         particlesJS('particles-js', {
           "particles": {
@@ -344,8 +504,7 @@
         tl.from(".hero-title", { duration: 0.8, y: 30, opacity: 0 })
           .from(".hero-subtitle", { duration: 0.8, y: 20, opacity: 0 }, "-=0.6")
           .from(".hero-description", { duration: 0.8, y: 20, opacity: 0 }, "-=0.7")
-          .from("#rover-3d-container", { duration: 1.2, y: 50, opacity: 0, ease: "elastic.out(1, 0.5)" }, "-=0.6")
-          .from(".launch-button", { duration: 0.5, y: 20, opacity: 0 }, "-=0.8");
+          .from("#rover-3d-container", { duration: 1.2, y: 50, opacity: 0, ease: "elastic.out(1, 0.5)" }, "-=0.6");
 
         gsap.utils.toArray('.card').forEach(card => {
             gsap.to(card, {
@@ -358,20 +517,60 @@
             });
         });
 
-        // parallax for 3D model
-        document.querySelector('.hero').addEventListener('mousemove', (e) => {
-            if (!model) return;
-            const x = (e.clientX / window.innerWidth) - 0.5;
-            const y = (e.clientY / window.innerHeight) - 0.5;
-            gsap.to(model.rotation, {
-                duration: 1.5,
-                y: x * Math.PI * 0.5,
-                x: y * Math.PI * 0.25,
-                ease: "power2.out"
-            });
-        });
+(() => {
+    const container = document.getElementById('rover-3d-container');
+    if (!container) return;
 
-        // scroll progress bar
+    let rect = container.getBoundingClientRect();
+
+    const updateRect = () => {
+        rect = container.getBoundingClientRect();
+    };
+
+    window.addEventListener('resize', updateRect);
+    container.addEventListener('mouseenter', updateRect);
+
+    container.addEventListener('mousemove', (e) => {
+        if (!model) return;
+
+        const localX = (e.clientX - rect.left) / rect.width;
+        const localY = (e.clientY - rect.top) / rect.height;
+
+        let x = localX - 0.5;
+        let y = localY - 0.5;
+
+        x = Math.max(-0.5, Math.min(0.5, x));
+        y = Math.max(-0.5, Math.min(0.5, y));
+
+        y = -y;
+
+        const MAX_ROT_Y = Math.PI;
+        const MAX_ROT_X = Math.PI / 3;
+
+        const rotY = x * 2 * MAX_ROT_Y;
+        const rotX = y * 2 * MAX_ROT_X;
+
+        gsap.to(model.rotation, {
+            duration: 0.6,
+            y: rotY,
+            x: rotX,
+            ease: "power2.out"
+        });
+    });
+
+    container.addEventListener('mouseleave', () => {
+        if (!model) return;
+
+        gsap.to(model.rotation, {
+            duration: 0.6,
+            x: 0,
+            y: 0,
+            ease: "power2.out"
+        });
+    });
+})();
+
+
         window.addEventListener('scroll', () => {
             const scrollableHeight = document.documentElement.scrollHeight - window.innerHeight;
             const scrolled = (window.scrollY / scrollableHeight) * 100;
@@ -379,19 +578,6 @@
         });
     });
 
-    // These functions will be overridden by dashboard.js
-    function moveForward(){}
-    function moveBackward(){}
-    function moveLeft(){}
-    function moveRight(){}
-    function emergencyStop(){}
-    function sendCustomCommand(){}
-    function goNorth(){}
-    function goSouth(){}
-    function goEast(){}
-    function goWest(){}
-    function goHome(){}
-    function sendCustomGoal(){}
     </script>
 </body>
 </html>

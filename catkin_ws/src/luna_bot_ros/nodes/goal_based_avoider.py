@@ -6,6 +6,7 @@ Goal Navigation + Patrol Mode
 - Avoids obstacles in both modes
 """
 
+
 import math
 import random
 import rospy
@@ -13,21 +14,26 @@ import tf
 from geometry_msgs.msg import Twist, PoseStamped
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
+from actionlib_msgs.msg import GoalID
 from avoider_large_rover import LargeRoverAvoider
 
 
 def main():
     rospy.init_node("goal_based_avoider")
 
+
     vel = Twist()
     avoider = LargeRoverAvoider(vel, obstacle_threshold=19.0)
+
 
     current_goal = [None]
     robot_pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
     goal_tolerance = 2.0
 
+
     post_avoid_counter = [0]
     POST_AVOID_LOOPS = 20
+
 
     # Patrol mode state
     patrol_mode = [True]
@@ -36,7 +42,20 @@ def main():
     last_patrol_position = [{'x': 0.0, 'y': 0.0}]
     patrol_stuck_check = [0]
 
+
     # ---- Subscribers ----
+    def cancel_callback(msg):
+        """Handle goal cancellation requests"""
+        if current_goal[0] is not None:
+            current_goal[0] = None
+            patrol_mode[0] = False
+            post_avoid_counter[0] = 0
+            
+            rospy.loginfo("-" * 50)
+            rospy.loginfo("Goal cancelled by user")
+            rospy.loginfo("Returning to patrol mode")
+            rospy.loginfo("-" * 50)
+
     def goal_callback(msg):
         current_goal[0] = msg.pose
         post_avoid_counter[0] = 0
@@ -56,12 +75,16 @@ def main():
         ])
         robot_pose['yaw'] = yaw
 
+
     rospy.Subscriber("/scan", LaserScan, avoider.identify_regions)
+    rospy.Subscriber("/move_base/cancel", GoalID, cancel_callback)
     rospy.Subscriber("/move_base_simple/goal", PoseStamped, goal_callback)
     rospy.Subscriber("/odom", Odometry, odom_callback)
 
+
     pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
     rate = rospy.Rate(10)
+
 
     # ---- Startup Log ----
     rospy.loginfo("-" * 50)
@@ -70,11 +93,14 @@ def main():
     rospy.loginfo("Patrol mode active")
     rospy.loginfo("-" * 50)
 
+
     was_avoiding = False
+
 
     # ========================= MAIN LOOP =========================
     while not rospy.is_shutdown():
         goal = current_goal[0]
+
 
         # ------------------------ PATROL MODE ------------------------
         if goal is None:
@@ -157,6 +183,7 @@ def main():
             rate.sleep()
             continue
 
+
         # ------------------------ GOAL MODE ------------------------
         dx = goal.position.x - robot_pose['x']
         dy = goal.position.y - robot_pose['y']
@@ -215,6 +242,7 @@ def main():
 
         pub.publish(vel)
         rate.sleep()
+
 
 
 if __name__ == "__main__":
