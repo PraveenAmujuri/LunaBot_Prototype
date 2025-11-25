@@ -64,7 +64,7 @@ setInterval(() => {
   // Calculate averages
   const totalBytes = trafficHistory.samples.reduce((sum, s) => sum + s.bytes, 0);
   const totalMessages = trafficHistory.samples.reduce((sum, s) => sum + s.messages, 0);
-  const timeSpan = Math.max(1, trafficHistory.samples.length); // seconds (avoid div by 0)
+  const timeSpan = Math.max(1, trafficHistory.samples.length);
   const bytesPerSec = totalBytes / timeSpan;
   const messagesPerSec = totalMessages / timeSpan;
   
@@ -553,8 +553,7 @@ function updateSystemMetrics(data) {
     // 1. CPU Update
     const cpuVal = document.getElementById('cpu-value');
     if (cpuVal) cpuVal.textContent = cpu.toFixed(0) + "%";
-    
-    // Sparkline Graph Logic
+
     const sparkPath = document.getElementById('cpu-sparkline-path');
     const sparkFill = document.getElementById('cpu-sparkline-fill');
     
@@ -562,8 +561,6 @@ function updateSystemMetrics(data) {
         const height = 50;
         // Map CPU 0-100% to Y 50-0
         const y = 50 - (cpu / 100 * 50); 
-        
-        // Create a "pulse" shape
         const dLine = `M0,50 L20,50 L40,${y} L80,${y} L90,50 L100,50`;
         
         sparkPath.setAttribute('d', dLine);
@@ -577,15 +574,12 @@ function updateSystemMetrics(data) {
     updateRadial('gpu', gpu);
     const gpuBig = document.getElementById('gpu-big-text');
     if(gpuBig) gpuBig.textContent = gpu.toFixed(0) + "%";
-    // display GPU memory usage (prefer gpu_mem_* fields if present)
 const gpuDetailsEl = document.getElementById('gpu-details');
 if (gpuDetailsEl) {
-  // backend sends bytes; show in GB with single decimal
   const memUsed = data.gpu_mem_used || 0;
   const memTotal = data.gpu_mem_total || 0;
   const memPct  = (data.gpu_mem_percent !== undefined) ? data.gpu_mem_percent : (memTotal ? (memUsed / memTotal * 100) : 0);
 
-  // convert to GB (1 decimal)
   const usedGB  = (memUsed / (1024 ** 3));
   const totalGB = (memTotal / (1024 ** 3));
 
@@ -612,7 +606,7 @@ if (gpuDetailsEl) {
 
     const tempBar = document.getElementById('temp-bar');
     const tempVal = document.getElementById('temp-value');
-    const moonTemp = document.getElementById('moon-temp'); // header mini display
+    const moonTemp = document.getElementById('moon-temp'); 
     const gpuTemp = (data.gpu_temp !== undefined && data.gpu_temp !== null) ? data.gpu_temp : (data.temp !== undefined ? data.temp : 0);
     const safeTemp = Math.min(Math.max(Number(gpuTemp) || 0, 0), 200);
 
@@ -624,7 +618,7 @@ if (gpuDetailsEl) {
         if (safeTemp > 85) {
             tempBar.style.background = 'linear-gradient(90deg, #ff4444, #ff0000)';
         } else {
-            tempBar.style.background = ''; // default css
+            tempBar.style.background = ''; 
         }
     }
     if (moonTemp) {
@@ -663,8 +657,6 @@ function downloadDashboardData() {
       console.warn('Could not capture SLAM map image:', e);
     }
   }
-
-  // Collect all dashboard data from various sources
   const positionText = document.getElementById('positionDisplay')?.textContent || '(0, 0)';
   const velocityText = document.getElementById('velocityDisplay')?.textContent || '(0, 0)';
   const speedText = document.getElementById('speedDisplay')?.textContent || '0';
