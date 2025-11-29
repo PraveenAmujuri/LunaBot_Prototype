@@ -12,6 +12,7 @@
     --text-secondary:#bdc6d3;
     --text-muted:#848d97;
     --shimmer-bg:#161b22;
+    --accent-blue: rgba(0,212,255,0.22);
 }
 [data-theme="light"]{
     --primary-accent:#8c7028;
@@ -273,11 +274,6 @@ input:checked+.slider:before{transform:translateX(26px)}
 /* reduced-motion preference */
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
-  display: flex !important;          
-  flex-direction: column !important; 
-  align-items: flex-start !important;
-  gap: 10px !important;
-}
 
 .system-metrics-card .metric-item.cpu-section .metric-value-giant {
   display: block !important;
@@ -319,4 +315,9 @@ input:checked+.slider:before{transform:translateX(26px)}
 .system-metrics-card .metric-item.cpu-section .cpu-main .sparkline-wrapper {
   width: 100%;
   height: 50px;
+}
+[data-theme="light"] .log-info {
+  color: #222 !important;                  /* darker text */
+  background: rgba(0,0,0,0.04) !important; /* slightly darker background */
+  border-left-color: rgba(0,0,0,0.15) !important;
 }
