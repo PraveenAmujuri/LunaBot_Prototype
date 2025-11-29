@@ -450,6 +450,10 @@
         document.getElementById('theme-toggle').addEventListener('change', function() {
             document.body.setAttribute('data-theme', this.checked ? 'light' : '');
             if (!this.checked) document.body.removeAttribute('data-theme');
+                window.scrollTo({
+                        top: 0,
+                        behavior: "smooth"
+                        });
         });
 
         gsap.registerPlugin(ScrollTrigger);
