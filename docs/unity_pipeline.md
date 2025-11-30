@@ -17,7 +17,7 @@ float rosY = -p.x;     // Unity -X is ROS Y
 float rosZ = p.y;      // Unity Y is ROS Z
 
 ```
-### 2. Custom Sensor Drivers
+## 2. Custom Sensor Drivers
 We wrote raw data encoders to simulate hardware drivers within the game engine.
 
 **LiDAR Simulation (LidarSensor.cs)**
@@ -35,7 +35,7 @@ Encoding: Raw float data is encoded into 32FC1 byte arrays to match RealSense ca
 
 Optimization: GPU-accelerated rendering ensures the depth stream maintains 30FPS without stalling the main physics thread.
 
-### 3. Physics-Based Control
+## 3. Physics-Based Control
 Instead of kinematic translation (teleporting), the rover is driven by Torque and Force application to a RigidBody. This allows us to test control algorithms against:
 
 Wheel slip on low-friction lunar regolith.
@@ -43,3 +43,53 @@ Wheel slip on low-friction lunar regolith.
 Inertia and momentum during emergency stops.
 
 Center-of-mass shifts on inclines.
+
+## 4. Message Parsing & Timestamps
+
+Unity acts as both a publisher and subscriber for ROS topics.
+
+### `/cmd_vel`
+Velocity commands received via rosbridge are parsed and applied to wheel forces inside Unity.
+
+### Timestamp Behavior
+
+| Component        | Timestamp Type      |
+|------------------|----------------------|
+| **Depth Camera** | ROS epoch            |
+| **RGB Camera**   | Unity `Time.time`    |
+| **Live Camera**  | Unity `Time.time`    |
+
+**Future Improvement:**  
+Unify all timestamps to **ROS epoch** for perfect multi-sensor synchronization.
+
+---
+
+## 5. ROS Topic Summary
+
+### Unity → ROS (Published Topics)
+
+| Topic                        | Source                   | Type          |
+|------------------------------|--------------------------|---------------|
+| `/scan`                      | LidarSensor.cs           | LaserScan     |
+| `/camera/color/image_raw`    | RoverCameraPublisher.cs  | Image         |
+| `/camera/depth/image_raw`    | DepthCameraPublisher.cs  | Image (32FC1) |
+| `/odom`                      | ROSControlledRover.cs    | Odometry      |
+| `/tf`                        | ROSControlledRover.cs    | TFMessage     |
+
+### ROS → Unity (Subscribed Topics)
+
+| Topic      | Description               |
+|------------|----------------------------|
+| `/cmd_vel` | Velocity command input     |
+
+---
+
+## Summary
+
+The Unity simulation pipeline provides:
+
+- High-fidelity sensor streams  
+- Accurate ROS coordinate conversion  
+- Physics-driven rover motion  
+- Realistic RGB, Depth, and LiDAR publishing  
+- Full compatibility with RTAB-Map, YOLOv8, and the LunaBot autonomy stack  

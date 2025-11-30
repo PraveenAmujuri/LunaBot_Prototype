@@ -9,7 +9,7 @@ The LunaBot architecture is designed as a distributed system comprising three di
 ## Process Flow Diagram
 *(High-level architecture, simplified from the actual `rqt_graph` output)*
 
-![Architecture Diagram](images/node_graph.png)
+![Architecture Diagram](images/system_architecture.png)
 
 ## Communication Bridges
 The system relies on a high-throughput **TCP/WebSocket bridge** to connect the disparate components:
