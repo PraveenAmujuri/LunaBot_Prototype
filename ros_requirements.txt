@@ -1,0 +1,25 @@
+# 🔶 ROS Python Requirements
+# Install in ROS Python environment (system Python 3.8)
+
+# YOLOv8 / Ultralytics 
+ultralytics==8.1.0
+
+#  OpenCV (ROS-side) 
+opencv-python==4.9.0.80
+
+# Numeric & Array Processing 
+numpy==1.26.4
+
+# Torch (GPU Build Recommended) 
+# If you have CUDA 11.8:
+torch==2.1.0+cu118
+torchvision==0.16.0+cu118
+torchaudio==2.1.0+cu118
+# If CPU only, comment above and use:
+# torch==2.1.0
+# torchvision==0.16.0
+# torchaudio==2.1.0
+
+# System Monitoring 
+psutil==5.9.8
+nvidia-ml-py==12.535.133

@@ -1,0 +1,28 @@
+#  LunaBot Dashboard - Python Requirements
+# Web Dashboard environment (Flask + SocketIO + Metrics)
+# Python 3.8 - 3.10 compatible
+
+# Web Framework 
+Flask==3.0.2
+Flask-SocketIO==5.3.6
+python-socketio==5.11.2
+python-engineio==4.9.0
+
+# Async Engine
+eventlet==0.36.1
+
+#  WebSocket Client 
+websocket-client==1.7.0
+
+# Image & Data Processing 
+opencv-python==4.9.0.80
+numpy==1.26.4
+Pillow==10.2.0
+
+# System Metrics 
+psutil==5.9.8
+nvidia-ml-py==12.535.133
+
+# Networking & Utility 
+netifaces==0.11.0
+rospkg==1.5.0
