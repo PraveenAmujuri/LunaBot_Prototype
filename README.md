@@ -1,3 +1,5 @@
+<img width="1584" height="672" alt="banner" src="https://github.com/user-attachments/assets/89829ca8-38ad-4cdc-a067-0a95a30948d1" />
+
 # 🌑 LunaBot: Autonomous Lunar Rover Prototype
 
 [![ROS](https://img.shields.io/badge/ROS-Noetic-22314E?style=for-the-badge&logo=ros&logoColor=white)](http://wiki.ros.org/noetic) 
@@ -12,8 +14,9 @@
 
 ##  System Demo
 
-[![LunaBot Demo](docs/images/Demo.gif)](https://github.com/user-attachments/assets/fbb863d5-be58-439c-8847-cc7c20c437a6)
+[![LunaBot Demo](docs/images/Demo.gif)](https://github.com/user-attachments/assets/eb245942-7f71-4e28-91c5-c25168cb870c)
 
+![LunaBot Demo](docs/images/Demo.gif)
 ##  System Architecture
 
 The project operates as a distributed system across three distinct layers, communicating via high-throughput **TCP/WebSockets**.
