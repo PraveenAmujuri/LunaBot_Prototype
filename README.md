@@ -1,6 +1,5 @@
 <img width="1584" height="532" alt="banner" src="https://github.com/user-attachments/assets/2d2a0218-5fec-4927-8e37-9910ce7afad2" />
 
-
 # 🌑 LunaBot: Autonomous Lunar Rover Prototype
 
 [![ROS](https://img.shields.io/badge/ROS-Noetic-22314E?style=for-the-badge&logo=ros&logoColor=white)](http://wiki.ros.org/noetic) 
