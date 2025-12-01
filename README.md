@@ -1,4 +1,5 @@
-<img width="1584" height="672" alt="banner" src="https://github.com/user-attachments/assets/89829ca8-38ad-4cdc-a067-0a95a30948d1" />
+<img width="1584" height="532" alt="banner" src="https://github.com/user-attachments/assets/2d2a0218-5fec-4927-8e37-9910ce7afad2" />
+
 
 # 🌑 LunaBot: Autonomous Lunar Rover Prototype
 
